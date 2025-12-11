@@ -7,18 +7,16 @@ import re
 st.set_page_config(page_title="診所行政綜合工具", layout="wide")
 st.title("🏥 診所行政綜合工具箱")
 
-tab1, tab2 = st.tabs(["📅 排班修改工具 (最終修復版)", "⏱️ 完診分析 (雙向補時版)"])
+tab1, tab2 = st.tabs(["📅 排班修改工具 (整合回填版)", "⏱️ 完診分析 (強力除錯版)"])
 
 # ==========================================
 # 通用函式
 # ==========================================
 def smart_date_parser(date_str):
     s = str(date_str).strip()
-    # 處理 1141201
-    if len(s) == 7 and s.isdigit():
+    if len(s) == 7 and s.isdigit(): # 1141201
         y_roc = int(s[:3])
         return f"{y_roc + 1911}-{s[3:5]}-{s[5:]}"
-    # 處理 12/01(週一)
     s_clean = re.sub(r'\(.*?\)', '', s).strip()
     for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%m/%d', '%m-%d'):
         try:
@@ -29,14 +27,6 @@ def smart_date_parser(date_str):
     return s
 
 def calculate_time_rule(raw_time_str, shift_type, clinic_name):
-    """
-    時間計算核心：
-    早: >12:00 +5m / <12:00 -> 12:00
-    午(立丞): >17:00 +5m / <17:00 -> 17:00
-    午(其他): >18:00 +5m / <18:00 -> 18:00
-    晚(立丞): >21:00 +5m / <21:00 -> 21:00
-    晚(其他): >21:30 +5m / <21:30 -> 21:30
-    """
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None
     try:
         t = datetime.strptime(str(raw_time_str).strip(), "%H:%M")
@@ -54,7 +44,7 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name):
                 if t > std: new_t = t + timedelta(minutes=5)
                 elif t < std: new_t = std
             else:
-                std = datetime.strptime("18:00", "%H:%M") # 非立丞規則
+                std = datetime.strptime("18:00", "%H:%M")
                 if t > std: new_t = t + timedelta(minutes=5)
                 elif t < std: new_t = std
 
@@ -86,7 +76,6 @@ with tab1:
 
     if uploaded_file is not None:
         try:
-            # --- 讀取檔案 ---
             if st.session_state.working_df is None or uploaded_file.name != st.session_state.last_uploaded_filename:
                 if uploaded_file.name.lower().endswith('.csv'):
                     try: df_raw = pd.read_csv(uploaded_file, encoding='utf-8', dtype=str)
@@ -96,7 +85,6 @@ with tab1:
                 else:
                     df_raw = pd.read_excel(uploaded_file, dtype=str)
 
-                # 標題日期標準化
                 rename_dict = {}
                 for col in df_raw.columns:
                     col_str = str(col).strip()
@@ -140,12 +128,9 @@ with tab1:
                 else:
                     all_names = []
 
-                # ==========================================
-                # 2. 自動回填
-                # ==========================================
+                # --- 自動回填 ---
                 st.markdown("---")
                 st.subheader("2. 依照完診分析自動更新")
-                
                 analysis_file = st.file_uploader("請上傳完診結果檔", type=['xlsx', 'xls', 'csv'], key="tab1_analysis")
 
                 if analysis_file:
@@ -186,10 +171,8 @@ with tab1:
                                         if col in dates_to_check and col in time_map:
                                             cell_val = str(row[col]).strip()
                                             if cell_val and cell_val.lower() != 'nan':
-                                                # 解析班別
                                                 shifts = re.split(r'[,\n]', cell_val)
                                                 has_m, has_a, has_e = False, False, False
-                                                
                                                 for s in shifts:
                                                     if "全" in s: has_m=True; has_a=True; has_e=True
                                                     if "早" in s: has_m=True
@@ -205,7 +188,6 @@ with tab1:
                                                                 elif th>=18: has_e=True
                                                             except: pass
 
-                                                # 計算時間
                                                 raw_m = time_map[col]['早']
                                                 raw_a = time_map[col]['午']
                                                 raw_e = time_map[col]['晚']
@@ -214,43 +196,26 @@ with tab1:
                                                 final_a = calculate_time_rule(raw_a, "午", selected_clinic) if has_a else None
                                                 final_e = calculate_time_rule(raw_e, "晚", selected_clinic) if has_e else None
 
-                                                # 顯示邏輯 (規則整合)
                                                 new_parts = []
-                                                
-                                                # 早診：所有診所都顯示
-                                                if has_m and final_m:
-                                                    new_parts.append(f"08:00-{final_m}")
+                                                if has_m and final_m: new_parts.append(f"08:00-{final_m}")
                                                 
                                                 if is_licheng:
-                                                    # 立丞：分開顯示
                                                     if has_a and final_a: new_parts.append(f"15:00-{final_a}")
                                                     if has_e and final_e: new_parts.append(f"18:30-{final_e}")
                                                 else:
-                                                    # 非立丞邏輯
-                                                    # 1. 早午班 (M+A) -> 顯示早診 + 午診 [這是修正重點]
-                                                    if has_m and has_a and not has_e:
+                                                    if has_m and has_a and not has_e: # 早午: 顯示早+午 (修正)
                                                         if final_a: new_parts.append(f"15:00-{final_a}")
-                                                    
-                                                    # 2. 午晚班 (A+E) -> 合併顯示 15:00~E_End
-                                                    elif not has_m and has_a and has_e:
+                                                    elif not has_m and has_a and has_e: # 午晚
                                                         if final_e: new_parts.append(f"15:00-{final_e}")
-                                                    
-                                                    # 3. 全天班 (M+A+E) -> 早診 + 合併午晚
-                                                    elif has_m and has_a and has_e:
+                                                    elif has_m and has_a and has_e: # 全天
                                                         if final_e: new_parts.append(f"15:00-{final_e}")
-                                                    
-                                                    # 4. 只有午班 (A)
-                                                    elif not has_m and has_a and not has_e:
+                                                    elif not has_m and has_a and not has_e: # 只有午
                                                         if final_a: new_parts.append(f"15:00-{final_a}")
-                                                    
-                                                    # 5. 只有晚班 (E)
-                                                    elif not has_m and not has_a and has_e:
+                                                    elif not has_m and not has_a and has_e: # 只有晚
                                                         if final_e: new_parts.append(f"18:30-{final_e}")
 
                                                 final_val = ",".join(new_parts)
-                                                
-                                                if not final_val and (has_m or has_a or has_e):
-                                                    pass
+                                                if not final_val and (has_m or has_a or has_e): pass
                                                 elif final_val != cell_val:
                                                     changes_list.append({
                                                         "✅執行": True,
@@ -281,94 +246,126 @@ with tab1:
                                     st.success("已寫入！")
                                     st.session_state['preview_df'] = None
                                     st.rerun()
-                        else: st.warning("格式錯誤")
                     except Exception as e: st.error(f"分析檔錯誤: {e}")
 
-                # 3. 手動排班
-                st.markdown("---")
-                st.subheader("3. 手動修改")
-                if name_col and all_names:
-                    with st.form("man_form", clear_on_submit=True):
-                        c1, c2 = st.columns([1, 1.5])
-                        with c1:
-                            sn = st.multiselect("人員", all_names)
-                            sd = st.multiselect("日期", date_cols_in_df)
-                        with c2:
-                            st.write("時段")
-                            c_1, c_2, c_3 = st.columns(3)
-                            with c_1: em=st.checkbox("早",True); ms=st.time_input("早起",datetime.strptime("08:00","%H:%M").time()); me=st.time_input("早迄",datetime.strptime("12:00","%H:%M").time())
-                            with c_2: ea=st.checkbox("午",True); as_=st.time_input("午起",datetime.strptime("15:00","%H:%M").time()); ae=st.time_input("午迄",datetime.strptime("18:00","%H:%M").time())
-                            with c_3: ee=st.checkbox("晚",True); es=st.time_input("晚起",datetime.strptime("18:30","%H:%M").time()); ee_t=st.time_input("晚迄",datetime.strptime("21:30","%H:%M").time())
-                        if st.form_submit_button("寫入"):
-                            s = []
-                            if em: s.append(f"{ms.strftime('%H:%M')}-{me.strftime('%H:%M')}")
-                            if ea: s.append(f"{as_.strftime('%H:%M')}-{ae.strftime('%H:%M')}")
-                            if ee: s.append(f"{es.strftime('%H:%M')}-{ee_t.strftime('%H:%M')}")
-                            f_s = ",".join(s)
-                            if sn and sd:
-                                for n in sn:
-                                    m = st.session_state.working_df[name_col]==n
-                                    for d in sd: 
-                                        if d in st.session_state.working_df.columns:
-                                            st.session_state.working_df.loc[m,d] = f_s
-                                st.session_state.modification_history.append("手動修改")
-                                st.rerun()
+            # --- 手動排班 ---
+            st.markdown("---")
+            st.subheader("3. 手動修改")
+            if name_col and all_names:
+                with st.form("man_form", clear_on_submit=True):
+                    c1, c2 = st.columns([1, 1.5])
+                    with c1:
+                        sn = st.multiselect("人員", all_names)
+                        sd = st.multiselect("日期", date_cols_in_df)
+                    with c2:
+                        st.write("時段")
+                        c_1, c_2, c_3 = st.columns(3)
+                        with c_1: em=st.checkbox("早",True); ms=st.time_input("早起",datetime.strptime("08:00","%H:%M").time()); me=st.time_input("早迄",datetime.strptime("12:00","%H:%M").time())
+                        with c_2: ea=st.checkbox("午",True); as_=st.time_input("午起",datetime.strptime("15:00","%H:%M").time()); ae=st.time_input("午迄",datetime.strptime("18:00","%H:%M").time())
+                        with c_3: ee=st.checkbox("晚",True); es=st.time_input("晚起",datetime.strptime("18:30","%H:%M").time()); ee_t=st.time_input("晚迄",datetime.strptime("21:30","%H:%M").time())
+                    if st.form_submit_button("寫入"):
+                        s = []
+                        if em: s.append(f"{ms.strftime('%H:%M')}-{me.strftime('%H:%M')}")
+                        if ea: s.append(f"{as_.strftime('%H:%M')}-{ae.strftime('%H:%M')}")
+                        if ee: s.append(f"{es.strftime('%H:%M')}-{ee_t.strftime('%H:%M')}")
+                        f_s = ",".join(s)
+                        if sn and sd:
+                            for n in sn:
+                                m = st.session_state.working_df[name_col]==n
+                                for d in sd: 
+                                    if d in st.session_state.working_df.columns:
+                                        st.session_state.working_df.loc[m,d] = f_s
+                            st.session_state.modification_history.append("手動修改")
+                            st.rerun()
 
-                # 4. 下載
-                st.markdown("---")
-                c1, c2, c3 = st.columns(3)
-                final = st.session_state.working_df
-                with c1:
-                    o = io.BytesIO()
-                    with pd.ExcelWriter(o, engine='openpyxl') as w: final.to_excel(w, index=False)
-                    st.download_button("下載 Excel", o.getvalue(), '排班表.xlsx')
-                with c2:
-                    try:
-                        import csv
-                        c = final.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
-                        st.download_button("下載 Big5 CSV", c, '排班表_Big5.csv', 'text/csv')
-                    except: pass
-                with c3:
-                    u = final.to_csv(index=False, encoding='utf-8-sig')
-                    st.download_button("下載 UTF-8 CSV", u, '排班表_UTF8.csv', 'text/csv')
+            # --- 下載 ---
+            st.markdown("---")
+            c1, c2, c3 = st.columns(3)
+            final = st.session_state.working_df
+            with c1:
+                o = io.BytesIO()
+                with pd.ExcelWriter(o, engine='openpyxl') as w: final.to_excel(w, index=False)
+                st.download_button("下載 Excel", o.getvalue(), '排班表.xlsx')
+            with c2:
+                try:
+                    import csv
+                    c = final.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
+                    st.download_button("下載 Big5 CSV", c, '排班表_Big5.csv', 'text/csv')
+                except: pass
+            with c3:
+                u = final.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button("下載 UTF-8 CSV", u, '排班表_UTF8.csv', 'text/csv')
 
         except Exception as e: st.error(f"讀取錯誤: {e}")
 
 # ==========================================
-# 分頁 2: 完診分析 (雙向補時)
+# 分頁 2: 完診分析 (除錯修正版)
 # ==========================================
 with tab2:
     st.header("批次完診分析")
-    fs = st.radio("檔案類型", ("系統檔(標題第4列)", "標準檔(標題第1列)"), horizontal=True)
-    hr = 4 if "第4列" in fs else 1
-    upl = st.file_uploader("上傳完診明細", type=['xlsx','xls','csv'], accept_multiple_files=True, key="t2")
-    hr_idx = st.number_input("標題列", min_value=1, value=hr) - 1
+    
+    # 檔案類型選擇
+    fs = st.radio(
+        "請選擇檔案類型：", 
+        ("🏥 原始系統匯出檔 (標題在第4列)", "📄 標準/分析結果檔 (標題在第1列)"), 
+        horizontal=True
+    )
+    default_hr = 4 if "第4列" in fs else 1
+    
+    upl = st.file_uploader("上傳完診明細 (可多檔)", type=['xlsx','xls','csv'], accept_multiple_files=True, key="t2")
+    hr_idx = st.number_input("資料標題在第幾列？", min_value=1, value=default_hr) - 1
 
     if upl:
-        f1 = upl[0]; f1.seek(0)
+        # 立即顯示預覽，方便除錯
+        st.subheader("📋 檔案預覽 (檢查是否讀取成功)")
         try:
-            if f1.name.lower().endswith('.csv'): df_s = pd.read_csv(f1, header=hr_idx, encoding='cp950', nrows=5)
-            else: df_s = pd.read_excel(f1, header=hr_idx, nrows=5)
+            f1 = upl[0]; f1.seek(0)
+            if f1.name.lower().endswith('.csv'): 
+                try: df_s = pd.read_csv(f1, header=hr_idx, encoding='cp950', nrows=5)
+                except: 
+                    f1.seek(0)
+                    df_s = pd.read_csv(f1, header=hr_idx, encoding='utf-8', nrows=5)
+            else: 
+                df_s = pd.read_excel(f1, header=hr_idx, nrows=5)
+            
             df_s.columns = df_s.columns.astype(str).str.strip()
+            st.dataframe(df_s.head(3))
+            
             cols = df_s.columns.tolist()
             c1, c2, c3 = st.columns(3)
-            with c1: d_c = st.selectbox("日期", cols, index=cols.index(next((x for x in cols if "日期" in x), cols[0])))
-            with c2: s_c = st.selectbox("午別", cols, index=cols.index(next((x for x in cols if "午" in x or "班" in x), cols[1] if len(cols)>1 else 0)))
-            with c3: t_c = st.selectbox("時間", cols, index=cols.index(next((x for x in cols if "時間" in x), cols[-1])))
+            # 自動抓取欄位，若抓不到則預設為 0
+            idx_d = next((i for i, x in enumerate(cols) if "日期" in x), 0)
+            idx_s = next((i for i, x in enumerate(cols) if any(k in x for k in ["午", "班", "時"])), 1 if len(cols)>1 else 0)
+            idx_t = next((i for i, x in enumerate(cols) if any(k in x for k in ["時間", "完診"])), len(cols)-1)
 
-            if st.button("開始分析", key="an_btn"):
+            with c1: d_c = st.selectbox("請確認「日期」欄位", cols, index=idx_d)
+            with c2: s_c = st.selectbox("請確認「午別」欄位", cols, index=idx_s)
+            with c3: t_c = st.selectbox("請確認「時間」欄位", cols, index=idx_t)
+
+            if st.button("🚀 開始分析", key="an_btn"):
                 res = []
                 bar = st.progress(0)
+                error_log = []
+
                 for i, f in enumerate(upl):
                     try:
                         f.seek(0)
-                        if f.name.lower().endswith('.csv'): h = pd.read_csv(f, header=None, nrows=1, encoding='cp950')
+                        # 讀標題 (找診所名)
+                        if f.name.lower().endswith('.csv'): 
+                            try: h = pd.read_csv(f, header=None, nrows=1, encoding='cp950')
+                            except: 
+                                f.seek(0); h = pd.read_csv(f, header=None, nrows=1, encoding='utf-8')
                         else: h = pd.read_excel(f, header=None, nrows=1)
                         c_name = str(h.iloc[0,0]).strip()[:4]
 
+                        # 讀內容
                         f.seek(0)
-                        if f.name.lower().endswith('.csv'): d = pd.read_csv(f, header=hr_idx, encoding='cp950')
+                        if f.name.lower().endswith('.csv'): 
+                            try: d = pd.read_csv(f, header=hr_idx, encoding='cp950')
+                            except: 
+                                f.seek(0); d = pd.read_csv(f, header=hr_idx, encoding='utf-8')
                         else: d = pd.read_excel(f, header=hr_idx)
+                        
                         d.columns = d.columns.astype(str).str.strip()
 
                         if all(x in d.columns for x in [d_c, s_c, t_c]):
@@ -378,7 +375,9 @@ with tab2:
                             p = g.pivot(index=d_c, columns=s_c, values=t_c).reset_index()
                             p.insert(0, '診所名稱', c_name)
                             res.append(p)
-                    except: pass
+                        else:
+                            error_log.append(f"{f.name}: 缺少欄位")
+                    except Exception as e: error_log.append(f"{f.name}: {e}")
                     bar.progress((i+1)/len(upl))
                 
                 if res:
@@ -390,20 +389,27 @@ with tab2:
                     shifts.sort(key=sk)
                     final = final[base + shifts].fillna("")
                     
-                    # 套用計算邏輯
+                    # 計算邏輯
                     mod = final.copy()
                     for c in shifts:
                         mod[c] = mod.apply(lambda r: calculate_time_rule(r[c], "早" if "早" in c else "午" if "午" in c else "晚", r['診所名稱']) or r[c], axis=1)
                     
-                    st.success("完成")
+                    st.success(f"完成！共合併 {len(res)} 個檔案。")
+                    if error_log: st.warning(f"部分失敗: {error_log}")
+                    
                     st.dataframe(mod.head())
                     c1, c2 = st.columns(2)
                     with c1:
                         o = io.BytesIO()
                         with pd.ExcelWriter(o, engine='openpyxl') as w: final.to_excel(w, index=False)
-                        st.download_button("原始 Excel", o.getvalue(), '原始.xlsx')
+                        st.download_button("📥 原始結果 (Excel)", o.getvalue(), '原始完診總表.xlsx')
                     with c2:
                         o = io.BytesIO()
                         with pd.ExcelWriter(o, engine='openpyxl') as w: mod.to_excel(w, index=False)
-                        st.download_button("修正 Excel", o.getvalue(), '修正.xlsx')
-        except: st.error("錯誤")
+                        st.download_button("📥 修正結果 (Excel)", o.getvalue(), '修正完診總表.xlsx', type="primary")
+                else: 
+                    st.error("無資料產生，請檢查欄位。")
+                    if error_log: st.write(error_log)
+
+        except Exception as e: 
+            st.error(f"檔案讀取失敗: {e}")
