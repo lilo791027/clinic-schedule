@@ -339,7 +339,7 @@ with tab2:
             idx_t = next((i for i, x in enumerate(cols) if any(k in x for k in ["時間", "完診"])), len(cols)-1)
 
             with c1: d_c = st.selectbox("請確認「日期」欄位", cols, index=idx_d)
-            with c2: s_c = st.selectbox("請確認「診段別」欄位", cols, index=idx_s)
+            with c2: s_c = st.selectbox("請確認「時段別」欄位", cols, index=idx_s)
             with c3: t_c = st.selectbox("請確認「時間」欄位", cols, index=idx_t)
 
             if st.button("🚀 開始分析", key="an_btn"):
@@ -413,4 +413,5 @@ with tab2:
 
         except Exception as e: 
             st.error(f"檔案讀取失敗: {e}")
+
 
