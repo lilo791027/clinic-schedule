@@ -6,7 +6,7 @@ import re
 
 # 設定頁面配置
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (含純早班設定)")
+st.title("🏥 診所行政綜合工具箱 (複合文字強力偵測版)")
 
 # 側邊欄：全域功能
 with st.sidebar:
@@ -15,94 +15,55 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-tab1, tab2 = st.tabs(["📅 排班修改工具 (整合回填版)", "⏱️ 完診分析 (強力除錯版)"])
+tab1, tab2 = st.tabs(["📅 排班修改工具 (整合回填版)", "⏱️ 完診分析"])
 
 # ==========================================
 # 通用函式
 # ==========================================
 def smart_date_parser(date_str):
-    """
-    智慧解析日期，支援民國年 (1141201) 與多種分隔符號
-    """
     s = str(date_str).strip()
-    if s.lower() == 'nan' or not s:
-        return ""
-        
-    # 處理民國年純數字 (7碼) e.g., 1141201
+    if s.lower() == 'nan' or not s: return ""
     if len(s) == 7 and s.isdigit(): 
         y_roc = int(s[:3])
         return f"{y_roc + 1911}-{s[3:5]}-{s[5:]}"
-    
-    # 清除括號 e.g., 2025/12/01(一)
     s_clean = re.sub(r'\(.*?\)', '', s).strip()
-    
-    # 嘗試多種格式
     for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%m/%d', '%m-%d', '%Y.%m.%d'):
         try:
             dt = datetime.strptime(s_clean, fmt)
-            if dt.year == 1900: 
-                dt = dt.replace(year=datetime.now().year)
+            if dt.year == 1900: dt = dt.replace(year=datetime.now().year)
             return dt.strftime('%Y-%m-%d')
-        except: 
-            continue
+        except: continue
     return s
 
 def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_morning=False):
-    """
-    根據診所別與班別計算修正後的完診時間
-    is_special_morning: 是否為純早班人員 (基準 13:00)
-    """
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None
     try:
-        # 統一處理時間格式
         t_str = str(raw_time_str).strip()
-        if isinstance(raw_time_str, datetime):
+        if isinstance(raw_time_str, datetime) or isinstance(raw_time_str, pd.Timestamp):
             t = raw_time_str
-        elif isinstance(raw_time_str, pd.Timestamp):
-            t = raw_time_str.to_pydatetime()
         else:
-            if len(t_str.split(':')) == 3:
-                t = datetime.strptime(t_str, "%H:%M:%S")
-            else:
-                t = datetime.strptime(t_str, "%H:%M")
+            t = datetime.strptime(t_str, "%H:%M:%S") if len(t_str.split(':')) == 3 else datetime.strptime(t_str, "%H:%M")
         
         base_date = datetime(2000, 1, 1)
-        t = base_date.replace(hour=t.hour, minute=t.minute, second=0)
-
+        t = base_date.replace(hour=t.hour, minute=t.minute, second=0) # Normalize date
         new_t = t
         is_licheng = "立丞" in str(clinic_name)
 
         if shift_type == "早":
-            # --- 修改重點：判斷純早班 ---
-            if is_special_morning:
-                std = base_date.replace(hour=13, minute=0) # 純早班基準 13:00
-            else:
-                std = base_date.replace(hour=12, minute=0) # 一般班基準 12:00
-            
+            # 若判斷為純早班人員，早班基準改為 13:00 (無論有無午晚班，早班規則都獨立套用)
+            std = base_date.replace(hour=13, minute=0) if is_special_morning else base_date.replace(hour=12, minute=0)
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
-        
         elif shift_type == "午":
-            if is_licheng:
-                std = base_date.replace(hour=17, minute=0)
-            else:
-                std = base_date.replace(hour=18, minute=0)
-            
+            std = base_date.replace(hour=17, minute=0) if is_licheng else base_date.replace(hour=18, minute=0)
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
-
         elif shift_type == "晚":
-            if is_licheng:
-                std = base_date.replace(hour=21, minute=0)
-            else:
-                std = base_date.replace(hour=21, minute=30)
-            
+            std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
-        
         return new_t.strftime("%H:%M")
-    except Exception:
-        return None
+    except: return None
 
 # ==========================================
 # 分頁 1: 排班修改工具
@@ -129,9 +90,8 @@ with tab1:
 
                 rename_dict = {}
                 for col in df_raw.columns:
-                    col_str = str(col).strip()
-                    if any(x in col_str for x in ['姓名', '編號', '班別', 'ID', 'Name']): continue
-                    new_name = smart_date_parser(col_str)
+                    if any(x in str(col) for x in ['姓名', '編號', '班別', 'ID', 'Name']): continue
+                    new_name = smart_date_parser(str(col))
                     if re.match(r'\d{4}-\d{2}-\d{2}', new_name):
                         rename_dict[col] = new_name
                 
@@ -151,36 +111,55 @@ with tab1:
                     date_cols_in_df = [c for c in df.columns if not any(ex in str(c) for ex in excludes)]
                 date_cols_in_df.sort()
 
-                with st.expander("⚙️ 欄位與人員設定", expanded=True):
+                # --- 欄位與自動偵測設定 ---
+                with st.expander("⚙️ 欄位與人員設定 (強力偵測「純早」)", expanded=True):
                     c1, c2 = st.columns(2)
                     with c1:
                         default_name = next((c for c in all_columns if "姓名" in c), all_columns[1] if len(all_columns)>1 else all_columns[0])
                         name_col = st.selectbox("姓名欄位：", all_columns, index=all_columns.index(default_name))
                     with c2:
                         default_id = next((c for c in all_columns if "編號" in c), "(不修正)")
-                        id_idx = 0
-                        if default_id in all_columns: id_idx = all_columns.index(default_id) + 1
+                        id_idx = 0 if default_id not in all_columns else all_columns.index(default_id) + 1
                         id_col = st.selectbox("員工編號欄位：", ["(不修正)"] + all_columns, index=id_idx)
                     
                     if id_col != "(不修正)":
                         df[id_col] = df[id_col].apply(lambda x: str(x).strip().split('.')[0].zfill(4) if str(x).lower()!='nan' else "")
                         st.session_state.working_df = df
 
-                    # 取得所有姓名供選擇
                     if name_col:
                         all_names = df[name_col].dropna().unique().tolist()
+                        
+                        # --- 自動偵測邏輯 (全面掃描版) ---
+                        # 掃描範圍：所有非日期欄位 (包含姓名欄，以防備註寫在名字裡)
+                        check_cols = [c for c in all_columns if c not in date_cols_in_df]
+                        
+                        detected_morning_staff = []
+                        keywords = ["純早"] # 關鍵字
+                        
+                        for idx, row in df.iterrows():
+                            # 檢查該列內容，若包含「純早」(如：板土中京純早、午班) 則命中
+                            row_content = " ".join([str(row[c]) for c in check_cols if not pd.isna(row[c])])
+                            if any(k in row_content for k in keywords):
+                                if row[name_col] not in detected_morning_staff:
+                                    detected_morning_staff.append(row[name_col])
+
                         st.markdown("---")
-                        # --- 修改重點：新增純早班人員選擇 ---
+                        st.write("🕵️ **自動偵測結果：** 只要該列資料出現 **「純早」** 字眼 (例如：板土中京純早...) 即會選取。")
                         special_morning_staff = st.multiselect(
-                            "🕰️ 設定「純早班」人員 (固定 08:00-13:00)", 
+                            "🕰️ 設定「純早班」人員 (08:00-13:00)", 
                             options=all_names,
-                            help="選取的人員，其早班結束基準時間將設為 13:00。若診所早於 13:00 完診，則以 13:00 計算。"
+                            default=detected_morning_staff,
+                            help="選取的人員，其「早班」時段將以 13:00 為基準。(午、晚班規則不變)"
                         )
+                        if detected_morning_staff:
+                            st.caption(f"✅ 已自動選取 {len(detected_morning_staff)} 位人員")
+                        else:
+                            st.caption("⚠️ 未偵測到「純早」關鍵字，請確認 Excel 或手動選擇。")
                     else:
                         all_names = []
                         special_morning_staff = []
 
-                # --- 自動回填 ---
+                # --- 自動回填邏輯 ---
                 st.markdown("---")
                 st.subheader("2. 依照完診分析自動更新")
                 analysis_file = st.file_uploader("請上傳完診結果檔", type=['xlsx', 'xls', 'csv'], key="tab1_analysis")
@@ -189,204 +168,126 @@ with tab1:
                     try:
                         if analysis_file.name.lower().endswith('.csv'):
                             df_ana = pd.read_csv(analysis_file, encoding='utf-8', dtype=str)
-                        else:
-                            df_ana = pd.read_excel(analysis_file, dtype=str)
+                        else: df_ana = pd.read_excel(analysis_file, dtype=str)
                         
                         if '診所名稱' in df_ana.columns and '日期' in df_ana.columns:
                             clinics = df_ana['診所名稱'].unique().tolist()
-                            col_a, col_b = st.columns(2)
-                            with col_a: selected_clinic = st.selectbox("A. 選擇診所：", clinics)
-                            with col_b: target_dates = st.multiselect("B. 選擇日期：", options=date_cols_in_df, placeholder="未選則檢查全部")
+                            c_a, c_b = st.columns(2)
+                            with c_a: selected_clinic = st.selectbox("A. 選擇診所：", clinics)
+                            with c_b: target_dates = st.multiselect("B. 選擇日期：", options=date_cols_in_df)
 
                             if st.button("🔍 產生預覽", type="primary"):
                                 ana_cols = df_ana.columns.tolist()
                                 col_m = next((c for c in ana_cols if "早" in c), None)
                                 col_a = next((c for c in ana_cols if "午" in c), None)
                                 col_e = next((c for c in ana_cols if "晚" in c), None)
-
-                                df_ana_target = df_ana[df_ana['診所名稱'] == selected_clinic].copy()
                                 
-                                time_map = {}
-                                for _, row in df_ana_target.iterrows():
-                                    d = smart_date_parser(row['日期'])
-                                    time_map[d] = {
-                                        '早': row[col_m] if col_m and not pd.isna(row[col_m]) else None,
-                                        '午': row[col_a] if col_a and not pd.isna(row[col_a]) else None,
-                                        '晚': row[col_e] if col_e and not pd.isna(row[col_e]) else None
-                                    }
+                                df_target = df_ana[df_ana['診所名稱'] == selected_clinic]
+                                time_map = {smart_date_parser(r['日期']): {'早': r.get(col_m), '午': r.get(col_a), '晚': r.get(col_e)} for _, r in df_target.iterrows()}
 
                                 changes_list = []
                                 dates_to_check = target_dates if target_dates else date_cols_in_df
                                 is_licheng = "立丞" in str(selected_clinic)
 
                                 for idx, row in df.iterrows():
-                                    # 判斷此人是否為純早班
-                                    is_special_person = row[name_col] in special_morning_staff
-
-                                    for col in df.columns:
-                                        if col in dates_to_check and col in time_map:
+                                    is_special = row[name_col] in special_morning_staff
+                                    for col in dates_to_check:
+                                        if col in time_map:
                                             cell_val = str(row[col]).strip()
-                                            
-                                            if cell_val and cell_val.lower() != 'nan':
+                                            if cell_val and cell_val.lower()!='nan':
                                                 shifts = re.split(r'[,\n\s]', cell_val)
                                                 has_m, has_a, has_e = False, False, False
-                                                
                                                 for s in shifts:
                                                     if not s: continue
-                                                    if "全" in s: has_m=True; has_a=True; has_e=True
+                                                    if "全" in s: has_m=has_a=has_e=True
                                                     if "早" in s: has_m=True
                                                     if "午" in s: has_a=True
                                                     if "晚" in s: has_e=True
-                                                    
                                                     if not any(x in s for x in ["早","午","晚","全"]):
-                                                        ts = re.split(r'[-~]', s)
-                                                        if len(ts)==2:
-                                                            try:
-                                                                th = datetime.strptime(ts[0].strip(), "%H:%M").hour
-                                                                if th < 13: has_m=True
-                                                                elif 13<=th<18: has_a=True
-                                                                elif th>=18: has_e=True
-                                                            except: pass
-
-                                                raw_m = time_map[col]['早']
-                                                raw_a = time_map[col]['午']
-                                                raw_e = time_map[col]['晚']
+                                                        try:
+                                                            th = int(s.split(':')[0]) if ':' in s else int(s.split('-')[0].split(':')[0])
+                                                            if th < 13: has_m=True
+                                                            elif 13<=th<18: has_a=True
+                                                            elif th>=18: has_e=True
+                                                        except: pass
                                                 
-                                                # 傳入 is_special_person 參數
-                                                final_m = calculate_time_rule(raw_m, "早", selected_clinic, is_special_person) if has_m else None
-                                                final_a = calculate_time_rule(raw_a, "午", selected_clinic) if has_a else None
-                                                final_e = calculate_time_rule(raw_e, "晚", selected_clinic) if has_e else None
-
-                                                new_parts = []
+                                                vals = time_map[col]
+                                                # 關鍵：將 is_special (是否純早) 傳入早班計算
+                                                fm = calculate_time_rule(vals['早'], "早", selected_clinic, is_special) if has_m else None
+                                                fa = calculate_time_rule(vals['午'], "午", selected_clinic) if has_a else None
+                                                fe = calculate_time_rule(vals['晚'], "晚", selected_clinic) if has_e else None
                                                 
-                                                if has_m and final_m: new_parts.append(f"08:00-{final_m}")
-                                                
+                                                parts = []
+                                                if has_m and fm: parts.append(f"08:00-{fm}")
                                                 if is_licheng:
-                                                    if has_a and final_a: new_parts.append(f"15:00-{final_a}")
-                                                    if has_e and final_e: new_parts.append(f"18:30-{final_e}")
+                                                    if has_a and fa: parts.append(f"15:00-{fa}")
+                                                    if has_e and fe: parts.append(f"18:30-{fe}")
                                                 else:
+                                                    # 非立丞邏輯
                                                     if has_m and has_a and not has_e:
-                                                        if final_a: new_parts.append(f"15:00-{final_a}")
+                                                        if fa: parts.append(f"15:00-{fa}")
                                                     elif not has_m and has_a and has_e:
-                                                        if final_e: new_parts.append(f"15:00-{final_e}")
+                                                        if fe: parts.append(f"15:00-{fe}")
                                                     elif has_m and has_a and has_e:
-                                                        if final_e: new_parts.append(f"15:00-{final_e}")
+                                                        if fe: parts.append(f"15:00-{fe}")
                                                     elif not has_m and has_a and not has_e:
-                                                        if final_a: new_parts.append(f"15:00-{final_a}")
+                                                        if fa: parts.append(f"15:00-{fa}")
                                                     elif not has_m and not has_a and has_e:
-                                                        if final_e: new_parts.append(f"18:30-{final_e}")
-
-                                                final_val = ",".join(new_parts)
+                                                        if fe: parts.append(f"18:30-{fe}")
                                                 
-                                                if not final_val: 
-                                                    pass
-                                                elif final_val != cell_val:
-                                                    changes_list.append({
-                                                        "✅執行": True,
-                                                        "姓名": row[name_col],
-                                                        "日期": col,
-                                                        "原始內容": cell_val,
-                                                        "修正後內容": final_val
-                                                    })
+                                                final_val = ",".join(parts)
+                                                if final_val and final_val != cell_val:
+                                                    changes_list.append({"✅執行": True, "姓名": row[name_col], "日期": col, "原始內容": cell_val, "修正後內容": final_val})
 
                                 if changes_list:
                                     st.session_state['preview_df'] = pd.DataFrame(changes_list)
-                                    st.success(f"找到 {len(changes_list)} 筆資料可更新。")
-                                else:
+                                    st.success(f"找到 {len(changes_list)} 筆更新。")
+                                else: 
                                     st.session_state['preview_df'] = None
                                     st.warning("無資料需要更新。")
 
                             if st.session_state.get('preview_df') is not None:
-                                edited_df = st.data_editor(st.session_state['preview_df'], hide_index=True)
-                                if st.button("🚀 確認寫入", type="primary"):
-                                    rows = edited_df[edited_df["✅執行"] == True]
-                                    cnt = 0
-                                    for _, row in rows.iterrows():
-                                        idxs = st.session_state.working_df.index[st.session_state.working_df[name_col] == row['姓名']].tolist()
-                                        if idxs:
-                                            st.session_state.working_df.at[idxs[0], row['日期']] = row['修正後內容']
-                                            cnt += 1
-                                    st.session_state.modification_history.append(f"自動更新: {selected_clinic} {cnt}筆")
-                                    st.success(f"已成功更新 {cnt} 筆資料！")
+                                edited = st.data_editor(st.session_state['preview_df'], hide_index=True)
+                                if st.button("🚀 確認寫入"):
+                                    rows = edited[edited["✅執行"]==True]
+                                    for _, r in rows.iterrows():
+                                        idxs = st.session_state.working_df.index[st.session_state.working_df[name_col] == r['姓名']]
+                                        if len(idxs)>0: st.session_state.working_df.at[idxs[0], r['日期']] = r['修正後內容']
+                                    st.success("已寫入！")
                                     st.session_state['preview_df'] = None
                                     st.rerun()
-                    except Exception as e: 
-                        st.error(f"分析檔錯誤: {e}")
-                        st.exception(e)
 
-            # --- 手動排班 ---
-            st.markdown("---")
-            st.subheader("3. 手動修改")
-            if name_col and all_names:
-                with st.form("man_form", clear_on_submit=True):
-                    c1, c2 = st.columns([1, 1.5])
-                    with c1:
-                        sn = st.multiselect("人員", all_names)
-                        sd = st.multiselect("日期", date_cols_in_df)
-                    with c2:
-                        st.write("時段設定")
-                        c_1, c_2, c_3 = st.columns(3)
-                        with c_1: em=st.checkbox("早",True); ms=st.time_input("早起",datetime.strptime("08:00","%H:%M").time()); me=st.time_input("早迄",datetime.strptime("12:00","%H:%M").time())
-                        with c_2: ea=st.checkbox("午",True); as_=st.time_input("午起",datetime.strptime("15:00","%H:%M").time()); ae=st.time_input("午迄",datetime.strptime("18:00","%H:%M").time())
-                        with c_3: ee=st.checkbox("晚",True); es=st.time_input("晚起",datetime.strptime("18:30","%H:%M").time()); ee_t=st.time_input("晚迄",datetime.strptime("21:30","%H:%M").time())
-                    
-                    if st.form_submit_button("寫入修改"):
-                        s = []
-                        if em: s.append(f"{ms.strftime('%H:%M')}-{me.strftime('%H:%M')}")
-                        if ea: s.append(f"{as_.strftime('%H:%M')}-{ae.strftime('%H:%M')}")
-                        if ee: s.append(f"{es.strftime('%H:%M')}-{ee_t.strftime('%H:%M')}")
-                        f_s = ",".join(s)
-                        
-                        if sn and sd:
-                            for n in sn:
-                                m = st.session_state.working_df[name_col]==n
-                                for d in sd: 
-                                    if d in st.session_state.working_df.columns:
-                                        st.session_state.working_df.loc[m,d] = f_s
-                            st.session_state.modification_history.append("手動修改")
-                            st.success("手動修改已寫入")
-                            st.rerun()
+                    except Exception as e: st.error(f"錯誤: {e}")
 
-            # --- 下載 ---
+            # --- 下載區塊 ---
             st.markdown("---")
-            st.subheader("4. 下載結果")
             c1, c2, c3 = st.columns(3)
-            final = st.session_state.working_df
             with c1:
                 o = io.BytesIO()
-                with pd.ExcelWriter(o, engine='openpyxl') as w: final.to_excel(w, index=False)
+                with pd.ExcelWriter(o, engine='openpyxl') as w: st.session_state.working_df.to_excel(w, index=False)
                 st.download_button("📥 下載 Excel", o.getvalue(), '排班表.xlsx')
             with c2:
                 try:
                     import csv
-                    c = final.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
+                    c = st.session_state.working_df.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
                     st.download_button("📥 下載 Big5 CSV", c, '排班表_Big5.csv', 'text/csv')
                 except: pass
             with c3:
-                u = final.to_csv(index=False, encoding='utf-8-sig')
+                u = st.session_state.working_df.to_csv(index=False, encoding='utf-8-sig')
                 st.download_button("📥 下載 UTF-8 CSV", u, '排班表_UTF8.csv', 'text/csv')
 
-        except Exception as e: 
-            st.error(f"發生錯誤: {e}")
-            st.exception(e)
+        except Exception as e: st.error(f"發生錯誤: {e}")
 
 # ==========================================
-# 分頁 2: 完診分析 (邏輯維持不變)
+# 分頁 2: 完診分析 (維持原樣)
 # ==========================================
 with tab2:
     st.header("批次完診分析")
-    st.info("此分頁用於分析診所整體完診時間，無需設定個人班別。")
-    
-    fs = st.radio(
-        "請選擇檔案類型：", 
-        ("🏥 原始系統匯出檔 (標題在第4列)", "📄 標準/分析結果檔 (標題在第1列)"), 
-        horizontal=True
-    )
+    fs = st.radio("請選擇檔案類型：", ("🏥 原始系統匯出檔 (標題在第4列)", "📄 標準/分析結果檔 (標題在第1列)"), horizontal=True)
     default_hr = 4 if "第4列" in fs else 1
-    
     upl = st.file_uploader("上傳完診明細 (可多檔)", type=['xlsx','xls','csv'], accept_multiple_files=True, key="t2")
     hr_idx = st.number_input("資料標題在第幾列？", min_value=1, value=default_hr) - 1
-
+    
     if upl:
         st.subheader("📋 檔案預覽")
         try:
@@ -396,8 +297,7 @@ with tab2:
                 except: 
                     f1.seek(0)
                     df_s = pd.read_csv(f1, header=hr_idx, encoding='utf-8', nrows=5)
-            else: 
-                df_s = pd.read_excel(f1, header=hr_idx, nrows=5)
+            else: df_s = pd.read_excel(f1, header=hr_idx, nrows=5)
             
             df_s.columns = df_s.columns.astype(str).str.strip()
             st.dataframe(df_s.head(3))
@@ -443,10 +343,7 @@ with tab2:
                             p.insert(0, '診所名稱', c_name)
                             p[d_c] = p[d_c].apply(smart_date_parser)
                             res.append(p)
-                        else:
-                            error_log.append(f"{f.name}: 缺少指定欄位")
-                    except Exception as e: 
-                        error_log.append(f"{f.name}: {e}")
+                    except Exception as e: error_log.append(f"{f.name}: {e}")
                     bar.progress((i+1)/len(upl))
                 
                 if res:
@@ -464,7 +361,6 @@ with tab2:
                         mod[c] = mod.apply(lambda r: calculate_time_rule(r[c], shift_type, r['診所名稱']) or r[c], axis=1)
                     
                     st.success(f"完成！共合併 {len(res)} 個檔案。")
-                    if error_log: st.warning(f"部分失敗: {error_log}")
                     
                     c1, c2 = st.columns(2)
                     with c1:
@@ -475,8 +371,3 @@ with tab2:
                         o = io.BytesIO()
                         with pd.ExcelWriter(o, engine='openpyxl') as w: mod.to_excel(w, index=False)
                         st.download_button("📥 修正完診總表", o.getvalue(), '修正完診總表.xlsx', type="primary")
-                else: 
-                    st.error("無資料產生。")
-                    if error_log: st.write(error_log)
-        except Exception as e: 
-            st.error(f"檔案讀取失敗: {e}")
