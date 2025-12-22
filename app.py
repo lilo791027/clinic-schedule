@@ -14,7 +14,6 @@ st.markdown("""
     .stDataFrame {border: 1px solid #f0f2f6; border-radius: 8px;}
     .stSuccess {background-color: #d4edda; color: #155724;}
     .stWarning {background-color: #fff3cd; color: #856404;}
-    .stInfo {background-color: #e2e3e5; color: #383d41;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -34,7 +33,6 @@ with st.sidebar:
     - 🔴 **變更機制**：僅在「延診」時更新時間。
     """)
 
-if 'staff_roles_df' not in st.session_state: st.session_state.staff_roles_df = None
 if 'working_df' not in st.session_state: st.session_state.working_df = None
 if 'last_filename' not in st.session_state: st.session_state.last_filename = ""
 
@@ -56,7 +54,10 @@ def smart_date_parser(date_str):
         except: continue
     return s
 
-def calculate_time_rule(raw_time_str, shift_type, clinic_name, role):
+def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_pure_morning):
+    """
+    回傳: (修正後時間字串, 是否延診Boolean)
+    """
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None, False
     try:
         t_str = str(raw_time_str).strip()
@@ -69,8 +70,8 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, role):
         t = base_date.replace(hour=t.hour, minute=t.minute, second=0)
         new_t = t
         is_licheng = "立丞" in str(clinic_name)
-        is_pure_morning = (role == "🌅 純早班")
         
+        # 設定標準時間
         if shift_type == "早":
             std = base_date.replace(hour=13, minute=0) if is_pure_morning else base_date.replace(hour=12, minute=0)
         elif shift_type == "午":
@@ -79,6 +80,7 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, role):
         elif shift_type == "晚":
             std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
         
+        # 判斷是否延診
         if t > std:
             new_t = t + timedelta(minutes=5)
             return new_t.strftime("%H:%M"), True
@@ -168,8 +170,9 @@ with tab_tool:
 # 分頁 B: 智能排班回填 (主功能)
 # ==========================================
 with tab_main:
-    st.subheader("步驟 1：上傳排班表並確認人員身分")
-    uploaded_file = st.file_uploader("拖或是點擊上傳原始排班表 (Excel/CSV)", type=['xlsx', 'xls', 'csv'], label_visibility="collapsed")
+    st.subheader("步驟 1：上傳排班表")
+    st.caption("請直接上傳原始排班表，系統會顯示內容讓您確認。")
+    uploaded_file = st.file_uploader("拖或是點擊上傳 (Excel/CSV)", type=['xlsx', 'xls', 'csv'], label_visibility="collapsed")
 
     if uploaded_file:
         try:
@@ -180,6 +183,7 @@ with tab_main:
                 else:
                     df_raw = pd.read_excel(uploaded_file, dtype=str)
 
+                # 日期欄位正規化
                 rename_dict = {}
                 for col in df_raw.columns:
                     if any(x in str(col) for x in ['姓名', '編號', '班別', 'ID', 'Name']): continue
@@ -187,75 +191,40 @@ with tab_main:
                     if re.match(r'\d{4}-\d{2}-\d{2}', new_name): rename_dict[col] = new_name
                 if rename_dict: df_raw = df_raw.rename(columns=rename_dict)
                 
+                # 自動加入「選取」欄位
+                # 邏輯：預設全選 (True)，但若整列出現「醫師」則不選 (False)
+                df_raw.insert(0, "✅選取", True)
+                
+                for idx, row in df_raw.iterrows():
+                    # 掃描整列內容
+                    row_content = " ".join([str(val) for val in row.values if not pd.isna(val)])
+                    if "醫師" in row_content or "★" in str(row.get('姓名', '')):
+                        df_raw.at[idx, "✅選取"] = False
+                
                 st.session_state.working_df = df_raw
                 st.session_state.last_filename = uploaded_file.name
-
-                df = st.session_state.working_df
-                all_cols = df.columns.tolist()
-                name_col = next((c for c in all_cols if "姓名" in c), all_cols[0])
-                
-                staff_data = []
-                seen_names = set()
-                
-                for idx, row in df.iterrows():
-                    name = str(row[name_col]).strip()
-                    if not name or name == 'nan' or name in seen_names: continue
-                    seen_names.add(name)
-                    
-                    row_str = " ".join([str(v) for v in row.values if not pd.isna(v)])
-                    
-                    role = "👤 一般人員"
-                    is_active = True
-                    
-                    if "醫師" in row_str or "★" in name or "醫師" in name:
-                        role = "👨‍⚕️ 醫師"
-                        is_active = False 
-                    elif "純早" in row_str:
-                        role = "🌅 純早班"
-                    
-                    staff_data.append({
-                        "姓名": name,
-                        "身分 (可修改)": role,
-                        "是否執行更新": is_active
-                    })
-                
-                st.session_state.staff_roles_df = pd.DataFrame(staff_data)
 
         except Exception as e:
             st.error(f"檔案讀取失敗: {e}")
             st.stop()
-    
-    # --- 新增功能：顯示排班表預覽 ---
+
+    # --- 顯示排班表預覽與勾選 (這是您要的表格) ---
     if st.session_state.working_df is not None:
-        with st.expander("📅 點擊展開/收合原始排班表預覽", expanded=True):
-            st.dataframe(st.session_state.working_df, use_container_width=True)
-
-    if st.session_state.staff_roles_df is not None:
-        st.info("👇 系統已自動判斷身分，請在下方表格確認 (若判斷正確則無需更動)：")
+        st.info("👇 請確認下方名單，**打勾** 代表要執行更新。醫師預設已取消勾選。")
         
-        col_editor, col_info = st.columns([2, 1])
+        # 使用 data_editor 讓使用者可以直接勾選/取消
+        edited_df = st.data_editor(
+            st.session_state.working_df,
+            hide_index=True,
+            use_container_width=True,
+            height=400,
+            column_config={
+                "✅選取": st.column_config.CheckboxColumn("執行?", width="small", default=True)
+            }
+        )
         
-        with col_editor:
-            edited_roles = st.data_editor(
-                st.session_state.staff_roles_df,
-                column_config={
-                    "身分 (可修改)": st.column_config.SelectboxColumn(
-                        "身分設定", width="medium",
-                        options=["👨‍⚕️ 醫師", "🌅 純早班", "👤 一般人員"], required=True,
-                    ),
-                    "是否執行更新": st.column_config.CheckboxColumn("執行回填?", default=True)
-                },
-                disabled=["姓名"], hide_index=True, use_container_width=True, height=300
-            )
-            st.session_state.staff_roles_df = edited_roles
-
-        with col_info:
-            n_doc = len(edited_roles[edited_roles["身分 (可修改)"] == "👨‍⚕️ 醫師"])
-            n_mor = len(edited_roles[edited_roles["身分 (可修改)"] == "🌅 純早班"])
-            n_nor = len(edited_roles[edited_roles["身分 (可修改)"] == "👤 一般人員"])
-            n_run = len(edited_roles[edited_roles["是否執行更新"] == True])
-            
-            st.markdown(f"#### 📊 統計\n- 👨‍⚕️ 醫師：{n_doc}\n- 🌅 純早班：{n_mor}\n- 👤 一般：{n_nor}\n---\n- ✅ **更新**：{n_run} 人")
+        # 更新 working_df 為使用者編輯後的結果
+        st.session_state.working_df = edited_df
 
     st.divider()
     st.subheader("步驟 2：上傳完診分析檔並執行")
@@ -263,7 +232,7 @@ with tab_main:
     analysis_file = st.file_uploader("上傳完診結果檔 (請先至「完診資料前處理」分頁製作)", type=['xlsx', 'xls', 'csv'], key="main_ana_uploader")
 
     if not analysis_file: st.stop()
-    if st.session_state.staff_roles_df is None: st.warning("請先完成步驟 1。"); st.stop()
+    if st.session_state.working_df is None: st.warning("請先完成步驟 1。"); st.stop()
 
     try:
         if analysis_file.name.lower().endswith('.csv'): df_ana = pd.read_csv(analysis_file, encoding='utf-8', dtype=str)
@@ -278,8 +247,8 @@ with tab_main:
                 run_btn = st.button("🚀 開始智能回填", type="primary", use_container_width=True)
 
             if run_btn:
-                role_map = {row['姓名']: row['身分 (可修改)'] for _, row in st.session_state.staff_roles_df.iterrows()}
-                active_users = set(st.session_state.staff_roles_df[st.session_state.staff_roles_df['是否執行更新'] == True]['姓名'])
+                # 篩選出使用者勾選的 Rows
+                target_rows = st.session_state.working_df[st.session_state.working_df["✅選取"] == True]
                 
                 df_target = df_ana[df_ana['診所名稱'] == selected_clinic]
                 ana_cols = df_ana.columns.tolist()
@@ -290,21 +259,28 @@ with tab_main:
                 time_map = {smart_date_parser(r['日期']): {'早': r.get(col_m), '午': r.get(col_a), '晚': r.get(col_e)} for _, r in df_target.iterrows()}
 
                 changes_list = []
+                # 取得原本的 DF 做操作，但只處理 target_rows 的 index
                 df_work = st.session_state.working_df
                 date_cols = [c for c in df_work.columns if re.match(r'\d{4}-\d{2}-\d{2}', str(c))]
-                name_col = next((c for c in df_work.columns if "姓名" in c), df_work.columns[0])
+                
+                # 找出姓名欄位
+                cols_list = df_work.columns.tolist()
+                name_col = next((c for c in cols_list if "姓名" in c), cols_list[1]) # 0是勾選框
                 is_licheng = "立丞" in str(selected_clinic)
 
                 progress_bar = st.progress(0)
-                total_rows = len(df_work)
+                total_rows = len(target_rows)
+                current_proc = 0
                 
-                for idx, row in df_work.iterrows():
+                # 只遍歷有勾選的 Rows
+                for idx, row in target_rows.iterrows():
+                    current_proc += 1
                     name = row[name_col]
-                    if name not in active_users: 
-                        progress_bar.progress((idx + 1) / total_rows); continue
-
-                    user_role = role_map.get(name, "👤 一般人員")
                     
+                    # 判斷是否純早 (直接掃描該列內容)
+                    row_content = " ".join([str(v) for v in row.values if not pd.isna(v)])
+                    is_pure_morning = "純早" in row_content
+
                     for col in date_cols:
                         if col in time_map:
                             cell_val = str(row[col]).strip()
@@ -326,9 +302,9 @@ with tab_main:
                                         except: pass
 
                                 vals = time_map[col]
-                                fm, md = calculate_time_rule(vals['早'], "早", selected_clinic, user_role)
-                                fa, ad = calculate_time_rule(vals['午'], "午", selected_clinic, user_role)
-                                fe, ed = calculate_time_rule(vals['晚'], "晚", selected_clinic, user_role)
+                                fm, md = calculate_time_rule(vals['早'], "早", selected_clinic, is_pure_morning)
+                                fa, ad = calculate_time_rule(vals['午'], "午", selected_clinic, is_pure_morning)
+                                fe, ed = calculate_time_rule(vals['晚'], "晚", selected_clinic, is_pure_morning)
 
                                 is_any_delayed = False
                                 if has_m and md: is_any_delayed = True
@@ -355,9 +331,11 @@ with tab_main:
                                 
                                 final_val = ",".join(parts)
                                 if final_val and final_val != cell_val:
+                                    # 更新 session state 的資料
                                     st.session_state.working_df.at[idx, col] = final_val
                                     changes_list.append({"姓名": name, "日期": col, "原內容": cell_val, "新內容": final_val})
-                    progress_bar.progress((idx + 1) / total_rows)
+                    
+                    progress_bar.progress(current_proc / total_rows)
 
                 if changes_list:
                     st.success(f"🎉 成功更新 {len(changes_list)} 筆排班資料！(僅包含延診資料)")
@@ -365,7 +343,9 @@ with tab_main:
                     
                     st.subheader("📥 下載更新後的排班表")
                     c_d1, c_d2, c_d3 = st.columns(3)
-                    final_df = st.session_state.working_df
+                    # 輸出前把「✅選取」欄位拿掉，比較乾淨
+                    final_df = st.session_state.working_df.drop(columns=["✅選取"])
+                    
                     with c_d1:
                         o = io.BytesIO()
                         with pd.ExcelWriter(o, engine='openpyxl') as w: final_df.to_excel(w, index=False)
@@ -378,5 +358,5 @@ with tab_main:
                             c = final_df.to_csv(index=False, encoding='cp950', errors='replace')
                             st.download_button("CSV (Big5)", c, '排班表_Big5.csv', key='dl_csv_b')
                         except: st.warning("無法產生 Big5 CSV")
-                else: st.warning("✅ 比對完成：所有人員皆準時或提早完診，無需更新任何資料。")
+                else: st.warning("✅ 比對完成：所有勾選人員皆準時或提早完診，無需更新任何資料。")
     except Exception as e: st.error(f"分析錯誤: {e}")
