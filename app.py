@@ -8,7 +8,7 @@ import re
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (立丞午診修正版 - 無上色)")
+st.title("🏥 診所行政綜合工具箱 (完整版：含延診偵測 & 批次修正)")
 
 # 側邊欄：全域功能
 with st.sidebar:
@@ -17,7 +17,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-tab1, tab2 = st.tabs(["📅 排班修改工具 (整合回填版)", "⏱️ 完診分析"])
+tab1, tab2 = st.tabs(["📅 排班修改工具 (整合回填版)", "⏱️ 完診分析 & 延診偵測"])
 
 # ==========================================
 # 通用函式
@@ -45,12 +45,9 @@ def smart_date_parser(date_str):
         except: continue
     return s
 
-def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_morning=False):
+def parse_time_obj(raw_time_str):
     """
-    核心工時計算邏輯
-    - shift_type: "早", "午", "晚"
-    - clinic_name: 判斷是否為 "立丞"
-    - is_special_morning: 是否為純早班人員 (早班到 13:00)
+    將時間字串轉為 datetime 物件，方便比較
     """
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None
     try:
@@ -58,46 +55,89 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
         if isinstance(raw_time_str, (datetime, pd.Timestamp)):
             t = raw_time_str
         else:
+            # 處理可能包含秒數的情況
             if len(t_str.split(':')) == 3:
                 t = datetime.strptime(t_str, "%H:%M:%S")
             else:
                 t = datetime.strptime(t_str, "%H:%M")
         
+        # 統一設定為 2000-01-01 以便只比較時間
         base_date = datetime(2000, 1, 1)
-        t = base_date.replace(hour=t.hour, minute=t.minute, second=0)
-        new_t = t
-        is_licheng = "立丞" in str(clinic_name)
+        return base_date.replace(hour=t.hour, minute=t.minute, second=0)
+    except:
+        return None
 
-        # === 早班規則 ===
-        if shift_type == "早":
-            std = base_date.replace(hour=13, minute=0) if is_special_morning else base_date.replace(hour=12, minute=0)
-            if t > std: new_t = t + timedelta(minutes=5)
-            elif t < std: new_t = std
+def check_is_delayed(time_obj, shift_type, clinic_name):
+    """
+    判斷是否延診
+    回傳: (是否延診 Boolean, 標準下班時間字串)
+    """
+    if not time_obj: return False, ""
+    
+    base_date = datetime(2000, 1, 1)
+    is_licheng = "立丞" in str(clinic_name)
+    threshold = None
+    threshold_str = ""
+
+    if shift_type == "早":
+        threshold = base_date.replace(hour=12, minute=0)
+        threshold_str = "12:00"
+    elif shift_type == "午":
+        if is_licheng:
+            threshold = base_date.replace(hour=17, minute=0)
+            threshold_str = "17:00"
+        else:
+            threshold = base_date.replace(hour=18, minute=0)
+            threshold_str = "18:00"
+    elif shift_type == "晚":
+        if is_licheng:
+            threshold = base_date.replace(hour=21, minute=0)
+            threshold_str = "21:00"
+        else:
+            threshold = base_date.replace(hour=21, minute=30)
+            threshold_str = "21:30"
+    
+    if threshold and time_obj > threshold:
+        return True, threshold_str
+    return False, threshold_str
+
+def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_morning=False):
+    """
+    核心工時計算邏輯 (含立丞午診規則)
+    """
+    t = parse_time_obj(raw_time_str)
+    if not t: return None
+    
+    new_t = t
+    base_date = datetime(2000, 1, 1)
+    is_licheng = "立丞" in str(clinic_name)
+
+    # === 早班規則 ===
+    if shift_type == "早":
+        std = base_date.replace(hour=13, minute=0) if is_special_morning else base_date.replace(hour=12, minute=0)
+        if t > std: new_t = t + timedelta(minutes=5)
+        elif t < std: new_t = std
+    
+    # === 午班規則 (立丞邏輯更新) ===
+    elif shift_type == "午":
+        if not is_licheng: 
+            return "18:00" # 非立丞統一 18:00
         
-        # === 午班規則 (立丞邏輯更新) ===
-        elif shift_type == "午":
-            if not is_licheng: 
-                return "18:00" # 非立丞統一 18:00
-            
-            # 立丞午班規則：
-            # 基準時間 17:00
-            std = base_date.replace(hour=17, minute=0)
-            
-            if t > std: 
-                # 超過 17:00 -> 加 5 分鐘
-                new_t = t + timedelta(minutes=5)
-            else: 
-                # 提早或準時 -> 補滿至 17:00
-                new_t = std
+        # 立丞午班規則：基準時間 17:00
+        std = base_date.replace(hour=17, minute=0)
+        
+        if t > std: 
+            new_t = t + timedelta(minutes=5) # 超過加5分
+        else: 
+            new_t = std # 未滿補齊
 
-        # === 晚班規則 ===
-        elif shift_type == "晚":
-            std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
-            if t > std: new_t = t + timedelta(minutes=5)
-            elif t < std: new_t = std
+    # === 晚班規則 ===
+    elif shift_type == "晚":
+        std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
+        if t > std: new_t = t + timedelta(minutes=5)
+        elif t < std: new_t = std
             
-        return new_t.strftime("%H:%M")
-    except: return None
+    return new_t.strftime("%H:%M")
 
 # ==========================================
 # 分頁 1: 排班修改工具
@@ -107,7 +147,6 @@ with tab1:
     
     if 'working_df' not in st.session_state: st.session_state.working_df = None
     if 'last_uploaded_filename' not in st.session_state: st.session_state.last_uploaded_filename = ""
-    if 'modification_history' not in st.session_state: st.session_state.modification_history = [] 
 
     uploaded_file = st.file_uploader("1. 請上傳原始排班表 (單一檔案)", type=['xlsx', 'xls', 'csv'], key="tab1_uploader")
 
@@ -132,7 +171,6 @@ with tab1:
                 if rename_dict: df_raw = df_raw.rename(columns=rename_dict)
                 st.session_state.working_df = df_raw
                 st.session_state.last_uploaded_filename = uploaded_file.name
-                st.session_state.modification_history = []
                 st.success("✅ 檔案讀取成功！")
 
             df = st.session_state.working_df
@@ -197,7 +235,8 @@ with tab1:
                             clinics = df_ana['診所名稱'].unique().tolist()
                             c_a, c_b = st.columns(2)
                             with c_a: selected_clinic = st.selectbox("A. 選擇診所：", clinics)
-                            with c_b: target_dates = st.multiselect("B. 選擇日期：", options=date_cols_in_df)
+                            # 🔥 這裡更新了提示文字
+                            with c_b: target_dates = st.multiselect("B. 選擇日期 (⚠️留空即代表「自動檢查所有日期」)：", options=date_cols_in_df)
 
                             if st.button("🔍 產生預覽", type="primary"):
                                 ana_cols = df_ana.columns.tolist()
@@ -209,6 +248,7 @@ with tab1:
                                 time_map = {smart_date_parser(r['日期']): {'早': r.get(col_m), '午': r.get(col_a), '晚': r.get(col_e)} for _, r in df_target.iterrows()}
 
                                 changes_list = []
+                                # 這裡實作了留空即全選的邏輯
                                 dates_to_check = target_dates if target_dates else date_cols_in_df
                                 is_licheng = "立丞" in str(selected_clinic)
 
@@ -222,12 +262,14 @@ with tab1:
                                             cell_val = str(row[col]).strip()
                                             is_doctor_cell = "醫師" in cell_val or is_doctor_row
                                             
+                                            # 判斷是否預設執行
                                             if is_doctor_cell or is_special:
                                                 default_execute = False
                                             else:
                                                 default_execute = True
 
                                             if cell_val and cell_val.lower()!='nan':
+                                                # 分析原始格子內的班別
                                                 shifts = re.split(r'[,\n\s]', cell_val)
                                                 has_m, has_a, has_e = False, False, False
                                                 for s in shifts:
@@ -253,10 +295,11 @@ with tab1:
                                                 if has_m and fm: parts.append(f"08:00-{fm}")
                                                 
                                                 if is_licheng:
-                                                    # 立丞午診：開始 14:00，結束依規則 (17:00 或 +5分)
+                                                    # 立丞午診特殊顯示
                                                     if has_a and fa: parts.append(f"14:00-{fa}")
                                                     if has_e and fe: parts.append(f"18:30-{fe}")
                                                 else:
+                                                    # 一般診所排版邏輯
                                                     if has_m and has_a and not has_e:
                                                         if fa: parts.append(f"15:00-{fa}")
                                                     elif not has_m and has_a and has_e:
@@ -306,7 +349,7 @@ with tab1:
             with c1:
                 o = io.BytesIO()
                 with pd.ExcelWriter(o, engine='openpyxl') as w: st.session_state.working_df.to_excel(w, index=False)
-                st.download_button("📥 下載 Excel", o.getvalue(), '排班表.xlsx')
+                st.download_button("📥 下載 Excel (無上色)", o.getvalue(), '排班表.xlsx')
             with c2:
                 try:
                     import csv
@@ -320,10 +363,10 @@ with tab1:
         except Exception as e: st.error(f"發生錯誤: {e}")
 
 # ==========================================
-# 分頁 2: 完診分析
+# 分頁 2: 完診分析 (含延診偵測)
 # ==========================================
 with tab2:
-    st.header("批次完診分析")
+    st.header("批次完診分析 & 異常偵測")
     fs = st.radio("請選擇檔案類型：", ("🏥 原始系統匯出檔 (標題在第4列)", "📄 標準/分析結果檔 (標題在第1列)"), horizontal=True)
     default_hr = 4 if "第4列" in fs else 1
     upl = st.file_uploader("上傳完診明細 (可多檔)", type=['xlsx','xls','csv'], accept_multiple_files=True, key="t2")
@@ -353,11 +396,12 @@ with tab2:
             with c2: s_c = st.selectbox("請確認「時段別」欄位", cols, index=idx_s)
             with c3: t_c = st.selectbox("請確認「時間」欄位", cols, index=idx_t)
 
-            if st.button("🚀 開始分析", key="an_btn"):
+            if st.button("🚀 開始分析並偵測延診", key="an_btn"):
                 res = []
                 bar = st.progress(0)
                 error_log = []
 
+                # 合併所有上傳檔案
                 for i, f in enumerate(upl):
                     try:
                         f.seek(0)
@@ -396,13 +440,61 @@ with tab2:
                     final = final[base + shifts].fillna("")
                     final = final.sort_values(by=d_c)
                     
+                    # === 延診偵測 & 修正時間邏輯 ===
+                    delayed_records = []
                     mod = final.copy()
-                    for c in shifts:
-                        shift_type = "早" if "早" in c else "午" if "午" in c else "晚"
-                        mod[c] = mod.apply(lambda r: calculate_time_rule(r[c], shift_type, r['診所名稱']) or r[c], axis=1)
                     
-                    st.success(f"完成！共合併 {len(res)} 個檔案。")
+                    for idx, row in final.iterrows():
+                        clinic = row['診所名稱']
+                        date_val = row[d_c]
+                        
+                        for col in shifts:
+                            raw_time = str(row[col]).strip()
+                            if not raw_time: continue
+                            
+                            shift_type = "早" if "早" in col else "午" if "午" in col else "晚"
+                            time_obj = parse_time_obj(raw_time)
+                            
+                            if time_obj:
+                                # 1. 檢查是否延診
+                                is_delayed, limit_str = check_is_delayed(time_obj, shift_type, clinic)
+                                if is_delayed:
+                                    delayed_records.append({
+                                        "日期": date_val,
+                                        "診所": clinic,
+                                        "班別": shift_type,
+                                        "標準時間": limit_str,
+                                        "實際完診": time_obj.strftime("%H:%M"),
+                                        "狀態": "⚠️ 延診"
+                                    })
+                                
+                                # 2. 計算修正後時間 (寫入 mod)
+                                # 注意：此處需將 time_obj 轉回 string 或直接傳入 calculate_time_rule
+                                mod.at[idx, col] = calculate_time_rule(time_obj, shift_type, clinic) or raw_time
+
+                    # === 顯示結果 ===
+                    st.success(f"分析完成！共處理 {len(res)} 個檔案。")
+
+                    # 🔥 延診報告區塊
+                    st.markdown("---")
+                    st.subheader("🚨 延診異常偵測報告")
+                    if delayed_records:
+                        df_delay = pd.DataFrame(delayed_records)
+                        # 依照日期排序
+                        df_delay = df_delay.sort_values(by="日期")
+                        
+                        st.error(f"注意！偵測到 {len(df_delay)} 筆延診紀錄：")
+                        st.dataframe(df_delay, use_container_width=True)
+                        
+                        # 下載延診報告
+                        csv_delay = df_delay.to_csv(index=False, encoding='utf-8-sig')
+                        st.download_button("📥 下載延診清單 (.csv)", csv_delay, "延診清單.csv", "text/csv")
+                    else:
+                        st.success("🎉 太棒了！本批資料完全沒有延診紀錄。")
                     
+                    st.markdown("---")
+                    
+                    # 下載區
                     c1, c2 = st.columns(2)
                     with c1:
                         o = io.BytesIO()
