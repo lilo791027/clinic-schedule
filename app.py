@@ -3,14 +3,12 @@ import pandas as pd
 from datetime import datetime, timedelta
 import io
 import re
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Font
 
 # ==========================================
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (Excel 自動上色版)")
+st.title("🏥 診所行政綜合工具箱 (立丞午診修正版 - 無上色)")
 
 # 側邊欄：全域功能
 with st.sidebar:
@@ -25,12 +23,20 @@ tab1, tab2 = st.tabs(["📅 排班修改工具 (整合回填版)", "⏱️ 完�
 # 通用函式
 # ==========================================
 def smart_date_parser(date_str):
+    """
+    智慧日期解析：支援民國年(1130101)、西元年、斜線或橫線分隔
+    """
     s = str(date_str).strip()
     if s.lower() == 'nan' or not s: return ""
+    # 處理 7 碼民國年 (如 1130101)
     if len(s) == 7 and s.isdigit(): 
         y_roc = int(s[:3])
         return f"{y_roc + 1911}-{s[3:5]}-{s[5:]}"
+    
+    # 移除括號與雜訊
     s_clean = re.sub(r'\(.*?\)', '', s).strip()
+    
+    # 嘗試多種常見格式
     for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%m/%d', '%m-%d', '%Y.%m.%d'):
         try:
             dt = datetime.strptime(s_clean, fmt)
@@ -40,6 +46,12 @@ def smart_date_parser(date_str):
     return s
 
 def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_morning=False):
+    """
+    核心工時計算邏輯
+    - shift_type: "早", "午", "晚"
+    - clinic_name: 判斷是否為 "立丞"
+    - is_special_morning: 是否為純早班人員 (早班到 13:00)
+    """
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None
     try:
         t_str = str(raw_time_str).strip()
@@ -56,18 +68,29 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
         new_t = t
         is_licheng = "立丞" in str(clinic_name)
 
+        # === 早班規則 ===
         if shift_type == "早":
             std = base_date.replace(hour=13, minute=0) if is_special_morning else base_date.replace(hour=12, minute=0)
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
         
+        # === 午班規則 (立丞邏輯更新) ===
         elif shift_type == "午":
             if not is_licheng: 
-                return "18:00"
+                return "18:00" # 非立丞統一 18:00
+            
+            # 立丞午班規則：
+            # 基準時間 17:00
             std = base_date.replace(hour=17, minute=0)
-            if t > std: new_t = t + timedelta(minutes=5)
-            else: new_t = std
+            
+            if t > std: 
+                # 超過 17:00 -> 加 5 分鐘
+                new_t = t + timedelta(minutes=5)
+            else: 
+                # 提早或準時 -> 補滿至 17:00
+                new_t = std
 
+        # === 晚班規則 ===
         elif shift_type == "晚":
             std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
             if t > std: new_t = t + timedelta(minutes=5)
@@ -75,41 +98,6 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
             
         return new_t.strftime("%H:%M")
     except: return None
-
-# 🔥 新增函式：Excel 匯出並針對特定儲存格上色
-def export_excel_with_highlights(df, changed_cells_set=None):
-    """
-    df: 要匯出的 DataFrame
-    changed_cells_set: 集合 {(row_idx, col_name), ...} 包含需要上色的座標
-    """
-    output = io.BytesIO()
-    # 使用 openpyxl 引擎寫入
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Sheet1')
-        workbook = writer.book
-        worksheet = writer.sheets['Sheet1']
-        
-        # 定義樣式：黃底紅字
-        highlight_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-        highlight_font = Font(color="FF0000", bold=True)
-
-        # 如果有傳入變更紀錄，進行上色
-        if changed_cells_set:
-            # 建立欄位名稱對應 index 的 map (Excel 是從 1 開始，且第一列是標題，所以資料從第2列開始)
-            col_map = {name: i+1 for i, name in enumerate(df.columns)}
-            
-            for r_idx, c_name in changed_cells_set:
-                if c_name in col_map:
-                    col_idx = col_map[c_name]
-                    # DataFrame index 是從 0 開始，Excel 資料列從第 2 列開始 (第1列是標題)
-                    excel_row = r_idx + 2 
-                    try:
-                        cell = worksheet.cell(row=excel_row, column=col_idx)
-                        cell.fill = highlight_fill
-                        cell.font = highlight_font
-                    except: pass
-                    
-    return output.getvalue()
 
 # ==========================================
 # 分頁 1: 排班修改工具
@@ -119,15 +107,13 @@ with tab1:
     
     if 'working_df' not in st.session_state: st.session_state.working_df = None
     if 'last_uploaded_filename' not in st.session_state: st.session_state.last_uploaded_filename = ""
-    # 🔥 新增：用來記錄哪些格子被改過
-    if 'changed_cells' not in st.session_state: st.session_state.changed_cells = set()
+    if 'modification_history' not in st.session_state: st.session_state.modification_history = [] 
 
     uploaded_file = st.file_uploader("1. 請上傳原始排班表 (單一檔案)", type=['xlsx', 'xls', 'csv'], key="tab1_uploader")
 
     if uploaded_file is not None:
         try:
             if st.session_state.working_df is None or uploaded_file.name != st.session_state.last_uploaded_filename:
-                # ... (讀取檔案邏輯與原程式碼相同，省略重複部分以節省篇幅) ...
                 if uploaded_file.name.lower().endswith('.csv'):
                     try: df_raw = pd.read_csv(uploaded_file, encoding='utf-8', dtype=str)
                     except: 
@@ -146,15 +132,15 @@ with tab1:
                 if rename_dict: df_raw = df_raw.rename(columns=rename_dict)
                 st.session_state.working_df = df_raw
                 st.session_state.last_uploaded_filename = uploaded_file.name
-                st.session_state.changed_cells = set() # 重置變更紀錄
+                st.session_state.modification_history = []
                 st.success("✅ 檔案讀取成功！")
 
             df = st.session_state.working_df
 
             if df is not None:
-                # ... (欄位與人員設定邏輯相同，省略) ...
                 all_columns = df.columns.tolist()
                 date_cols_in_df = [c for c in df.columns if re.match(r'\d{4}-\d{2}-\d{2}', str(c))]
+                
                 if not date_cols_in_df:
                     excludes = ['姓名', '編號', '班別', 'ID', 'Name', '診所名稱', '來源檔案', '✅選取', 'Unnamed']
                     date_cols_in_df = [c for c in df.columns if not any(ex in str(c) for ex in excludes)]
@@ -166,16 +152,17 @@ with tab1:
                         default_name = next((c for c in all_columns if "姓名" in c), all_columns[1] if len(all_columns)>1 else all_columns[0])
                         name_col = st.selectbox("姓名欄位：", all_columns, index=all_columns.index(default_name))
                     with c2:
-                        # ... (ID設定相同，省略) ...
                         default_id = next((c for c in all_columns if "編號" in c), "(不修正)")
                         id_idx = 0 if default_id not in all_columns else all_columns.index(default_id) + 1
                         id_col = st.selectbox("員工編號欄位：", ["(不修正)"] + all_columns, index=id_idx)
-                        if id_col != "(不修正)":
-                             df[id_col] = df[id_col].apply(lambda x: str(x).strip().split('.')[0].zfill(4) if str(x).lower()!='nan' else "")
-                             st.session_state.working_df = df
+                    
+                    if id_col != "(不修正)":
+                        df[id_col] = df[id_col].apply(lambda x: str(x).strip().split('.')[0].zfill(4) if str(x).lower()!='nan' else "")
+                        st.session_state.working_df = df
 
                     if name_col:
                         all_names = df[name_col].dropna().unique().tolist()
+                        
                         detected_morning_staff = []
                         keywords = ["純早"]
                         for idx, row in df.iterrows():
@@ -189,7 +176,8 @@ with tab1:
                         special_morning_staff = st.multiselect(
                             "🕰️ 設定「純早班」人員 (08:00-13:00)", 
                             options=all_names,
-                            default=detected_morning_staff
+                            default=detected_morning_staff,
+                            help="選取的人員，其「早班」時段將以 13:00 為基準，且排班修正預設不勾選。"
                         )
                     else:
                         all_names = []
@@ -200,7 +188,6 @@ with tab1:
                 analysis_file = st.file_uploader("請上傳完診結果檔", type=['xlsx', 'xls', 'csv'], key="tab1_analysis")
 
                 if analysis_file:
-                    # ... (分析與預覽邏輯相同，省略至確認寫入部分) ...
                     try:
                         if analysis_file.name.lower().endswith('.csv'):
                             df_ana = pd.read_csv(analysis_file, encoding='utf-8', dtype=str)
@@ -213,7 +200,6 @@ with tab1:
                             with c_b: target_dates = st.multiselect("B. 選擇日期：", options=date_cols_in_df)
 
                             if st.button("🔍 產生預覽", type="primary"):
-                                # ... (產生 changes_list 邏輯完全相同，省略) ...
                                 ana_cols = df_ana.columns.tolist()
                                 col_m = next((c for c in ana_cols if "早" in c), None)
                                 col_a = next((c for c in ana_cols if "午" in c), None)
@@ -236,11 +222,12 @@ with tab1:
                                             cell_val = str(row[col]).strip()
                                             is_doctor_cell = "醫師" in cell_val or is_doctor_row
                                             
-                                            if is_doctor_cell or is_special: default_execute = False
-                                            else: default_execute = True
+                                            if is_doctor_cell or is_special:
+                                                default_execute = False
+                                            else:
+                                                default_execute = True
 
                                             if cell_val and cell_val.lower()!='nan':
-                                                # ... (時間計算邏輯相同，省略) ...
                                                 shifts = re.split(r'[,\n\s]', cell_val)
                                                 has_m, has_a, has_e = False, False, False
                                                 for s in shifts:
@@ -266,6 +253,7 @@ with tab1:
                                                 if has_m and fm: parts.append(f"08:00-{fm}")
                                                 
                                                 if is_licheng:
+                                                    # 立丞午診：開始 14:00，結束依規則 (17:00 或 +5分)
                                                     if has_a and fa: parts.append(f"14:00-{fa}")
                                                     if has_e and fe: parts.append(f"18:30-{fe}")
                                                 else:
@@ -273,7 +261,8 @@ with tab1:
                                                         if fa: parts.append(f"15:00-{fa}")
                                                     elif not has_m and has_a and has_e:
                                                         if fa: parts.insert(0 if not parts else len(parts), f"15:00-{fa}")
-                                                    elif has_m and has_a and has_e: pass 
+                                                    elif has_m and has_a and has_e:
+                                                        pass 
                                                     elif not has_m and has_a and not has_e:
                                                         if fa: parts.append(f"15:00-{fa}")
                                                     elif not has_m and not has_a and has_e:
@@ -305,11 +294,7 @@ with tab1:
                                     rows = edited[edited["✅執行"]==True]
                                     for _, r in rows.iterrows():
                                         idxs = st.session_state.working_df.index[st.session_state.working_df[name_col] == r['姓名']]
-                                        if len(idxs)>0: 
-                                            st.session_state.working_df.at[idxs[0], r['日期']] = r['修正後內容']
-                                            # 🔥 關鍵：將變更的座標加入集合中
-                                            st.session_state.changed_cells.add((idxs[0], r['日期']))
-                                            
+                                        if len(idxs)>0: st.session_state.working_df.at[idxs[0], r['日期']] = r['修正後內容']
                                     st.success("已寫入！")
                                     st.session_state['preview_df'] = None
                                     st.rerun()
@@ -319,9 +304,9 @@ with tab1:
             st.markdown("---")
             c1, c2, c3 = st.columns(3)
             with c1:
-                # 🔥 修改：呼叫自訂的上色匯出函式
-                excel_data = export_excel_with_highlights(st.session_state.working_df, st.session_state.changed_cells)
-                st.download_button("📥 下載 Excel (變更處自動上色)", excel_data, '排班表_修正版.xlsx', help="修正過的欄位會顯示為黃底紅字")
+                o = io.BytesIO()
+                with pd.ExcelWriter(o, engine='openpyxl') as w: st.session_state.working_df.to_excel(w, index=False)
+                st.download_button("📥 下載 Excel", o.getvalue(), '排班表.xlsx')
             with c2:
                 try:
                     import csv
@@ -345,7 +330,6 @@ with tab2:
     hr_idx = st.number_input("資料標題在第幾列？", min_value=1, value=default_hr) - 1
     
     if upl:
-        # ... (讀取與處理邏輯完全相同，省略) ...
         st.subheader("📋 檔案預覽")
         try:
             f1 = upl[0]; f1.seek(0)
@@ -375,7 +359,6 @@ with tab2:
                 error_log = []
 
                 for i, f in enumerate(upl):
-                    # ... (合併檔案邏輯相同，省略) ...
                     try:
                         f.seek(0)
                         if f.name.lower().endswith('.csv'): 
@@ -426,18 +409,8 @@ with tab2:
                         with pd.ExcelWriter(o, engine='openpyxl') as w: final.to_excel(w, index=False)
                         st.download_button("📥 原始完診總表", o.getvalue(), '原始完診總表.xlsx')
                     with c2:
-                        # 🔥 修改：Tab 2 的比對上色邏輯
-                        # 找出 mod 與 final 不同的格子
-                        diff_cells = set()
-                        for r_idx in range(len(mod)):
-                            for col in shifts: # 只比較時段欄位
-                                val_orig = str(final.iloc[r_idx][col])
-                                val_mod = str(mod.iloc[r_idx][col])
-                                if val_orig != val_mod:
-                                    diff_cells.add((r_idx, col))
-                        
-                        # 使用相同的上色函式
-                        excel_data_mod = export_excel_with_highlights(mod, diff_cells)
-                        st.download_button("📥 修正完診總表 (差異自動上色)", excel_data_mod, '修正完診總表.xlsx', type="primary")
+                        o = io.BytesIO()
+                        with pd.ExcelWriter(o, engine='openpyxl') as w: mod.to_excel(w, index=False)
+                        st.download_button("📥 修正完診總表", o.getvalue(), '修正完診總表.xlsx', type="primary")
         except Exception as e: 
             st.error(f"發生錯誤: {e}")
