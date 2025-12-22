@@ -3,12 +3,13 @@ import pandas as pd
 from datetime import datetime, timedelta
 import io
 import re
+from openpyxl.styles import Alignment # 引入樣式設定
 
 # ==========================================
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (完整版：含延診偵測 & 批次修正)")
+st.title("🏥 診所行政綜合工具箱 (完整版：含延診偵測 & 格式修正)")
 
 # 側邊欄：全域功能
 with st.sidebar:
@@ -277,7 +278,8 @@ with tab1:
                                                     elif not has_m and not has_a and has_e:
                                                         if fe: parts.append(f"18:30-{fe}")
                                                 
-                                                final_val = ",".join(parts)
+                                                # === 🟢 修改：將分隔符號改成換行符號 \n (系統才能讀取) ===
+                                                final_val = "\n".join(parts)
                                                 
                                                 if final_val and final_val != cell_val:
                                                     changes_list.append({
@@ -314,8 +316,18 @@ with tab1:
             c1, c2, c3 = st.columns(3)
             with c1:
                 o = io.BytesIO()
-                with pd.ExcelWriter(o, engine='openpyxl') as w: st.session_state.working_df.to_excel(w, index=False)
-                st.download_button("📥 下載 Excel (無上色)", o.getvalue(), '排班表.xlsx')
+                # === 🟢 修改：匯出 Excel 時，強制開啟「自動換行」屬性 ===
+                with pd.ExcelWriter(o, engine='openpyxl') as w: 
+                    st.session_state.working_df.to_excel(w, index=False)
+                    # 取得工作表
+                    ws = w.sheets['Sheet1']
+                    # 遍歷所有儲存格，設定自動換行
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            cell.alignment = Alignment(wrap_text=True)
+                
+                st.download_button("📥 下載 Excel (修正換行格式)", o.getvalue(), '排班表_系統匯入用.xlsx')
+            
             with c2:
                 try:
                     import csv
@@ -475,15 +487,13 @@ with tab2:
                         styles = ['' for _ in row.index]
                         clinic = str(row['診所名稱'])
                         
-                        # 定義檢查函式
                         def apply_yellow(val_str, shift_type):
                             if val_str:
                                 t = parse_time_obj(val_str)
                                 is_d, _ = check_is_delayed(t, shift_type, clinic)
-                                if is_d: return 'background-color: #FFFF00' # 黃色
+                                if is_d: return 'background-color: #FFFF00' 
                             return ''
 
-                        # 針對早上、下午、晚上欄位分別檢查
                         if '早上(原始)' in row.index and '早上' in row.index:
                             s = apply_yellow(row['早上(原始)'], '早')
                             if s:
