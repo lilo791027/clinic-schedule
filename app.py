@@ -101,8 +101,9 @@ st.subheader("步驟 1：上傳排班表並確認人員身分")
 uploaded_file = st.file_uploader("拖或是點擊上傳原始排班表 (Excel/CSV)", type=['xlsx', 'xls', 'csv'], label_visibility="collapsed")
 
 if uploaded_file:
+    # 獨立的 Try/Except 區塊，避免語法錯誤
     try:
-        # 讀取檔案邏輯 (保持強大的相容性)
+        # 讀取檔案邏輯
         if st.session_state.working_df is None or uploaded_file.name != st.session_state.get('last_filename'):
             if uploaded_file.name.lower().endswith('.csv'):
                 try: df_raw = pd.read_csv(uploaded_file, encoding='utf-8', dtype=str)
@@ -121,7 +122,7 @@ if uploaded_file:
             st.session_state.working_df = df_raw
             st.session_state.last_filename = uploaded_file.name
 
-            # --- 自動偵測邏輯 (人性化的關鍵) ---
+            # --- 自動偵測邏輯 ---
             df = st.session_state.working_df
             all_cols = df.columns.tolist()
             name_col = next((c for c in all_cols if "姓名" in c), all_cols[0])
@@ -156,14 +157,17 @@ if uploaded_file:
             
             st.session_state.staff_roles_df = pd.DataFrame(staff_data)
 
-    # --- 顯示「人員角色儀表板」 ---
+    except Exception as e:
+        st.error(f"讀取檔案發生錯誤: {e}")
+        st.stop()
+
+    # --- 顯示「人員角色儀表板」 (這部分在 Try 之外) ---
     if st.session_state.staff_roles_df is not None:
         st.info("👇 系統已自動判斷身分，請直接在下方表格修改 (若判斷正確則無需更動)")
         
         col_editor, col_info = st.columns([2, 1])
         
         with col_editor:
-            # 這是最強大的功能：st.data_editor 讓使用者直接在表格操作，不用下拉選單
             edited_roles = st.data_editor(
                 st.session_state.staff_roles_df,
                 column_config={
@@ -189,11 +193,10 @@ if uploaded_file:
                 use_container_width=True,
                 height=300
             )
-            # 更新 Session State 中的角色表
+            # 更新 Session State
             st.session_state.staff_roles_df = edited_roles
 
         with col_info:
-            # 即時統計顯示
             n_doc = len(edited_roles[edited_roles["身分 (可修改)"] == "👨‍⚕️ 醫師"])
             n_mor = len(edited_roles[edited_roles["身分 (可修改)"] == "🌅 純早班"])
             n_nor = len(edited_roles[edited_roles["身分 (可修改)"] == "👤 一般人員"])
@@ -216,7 +219,6 @@ if uploaded_file:
 
     if analysis_file and st.session_state.staff_roles_df is not None:
         try:
-            # 讀取完診檔
             if analysis_file.name.lower().endswith('.csv'):
                 df_ana = pd.read_csv(analysis_file, encoding='utf-8', dtype=str)
             else: df_ana = pd.read_excel(analysis_file, dtype=str)
@@ -229,7 +231,7 @@ if uploaded_file:
                     selected_clinic = st.selectbox("選擇診所", clinics)
                 
                 with c2:
-                    st.write("") # Spacer
+                    st.write("") 
                     st.write("") 
                     run_btn = st.button("🚀 開始智能回填", type="primary", use_container_width=True)
 
@@ -240,8 +242,6 @@ if uploaded_file:
                     
                     df_target = df_ana[df_ana['診所名稱'] == selected_clinic]
                     
-                    # 建立時間對照表 (日期 -> {早, 午, 晚})
-                    # 找出完診檔對應欄位
                     ana_cols = df_ana.columns.tolist()
                     col_m = next((c for c in ana_cols if "早" in c), None)
                     col_a = next((c for c in ana_cols if "午" in c), None)
@@ -259,14 +259,12 @@ if uploaded_file:
                     name_col = next((c for c in df_work.columns if "姓名" in c), df_work.columns[0])
                     is_licheng = "立丞" in str(selected_clinic)
 
-                    # 開始比對與計算
                     progress_bar = st.progress(0)
                     total_rows = len(df_work)
                     
                     for idx, row in df_work.iterrows():
                         name = row[name_col]
                         
-                        # 如果不在「執行更新」名單中，跳過
                         if name not in active_users: 
                             progress_bar.progress((idx + 1) / total_rows)
                             continue
@@ -277,7 +275,6 @@ if uploaded_file:
                             if col in time_map:
                                 cell_val = str(row[col]).strip()
                                 if cell_val and cell_val.lower() != 'nan':
-                                    # 解析排班 (支援 "早", "早班", "08:00-12:00" 等)
                                     shifts = re.split(r'[,\n\s]', cell_val)
                                     has_m, has_a, has_e = False, False, False
                                     
@@ -287,7 +284,6 @@ if uploaded_file:
                                         if "早" in s: has_m=True
                                         if "午" in s: has_a=True
                                         if "晚" in s: has_e=True
-                                        # 數字判斷
                                         if not any(k in s for k in ["早","午","晚","全"]):
                                             try:
                                                 th = int(s.split(':')[0]) if ':' in s else int(s.split('-')[0].split(':')[0])
@@ -296,13 +292,11 @@ if uploaded_file:
                                                 elif th>=18: has_e=True
                                             except: pass
 
-                                    # 取得實際完診時間並計算
                                     vals = time_map[col]
                                     fm = calculate_time_rule(vals['早'], "早", selected_clinic, user_role) if has_m else None
                                     fa = calculate_time_rule(vals['午'], "午", selected_clinic, user_role) if has_a else None
                                     fe = calculate_time_rule(vals['晚'], "晚", selected_clinic, user_role) if has_e else None
 
-                                    # 組合新字串
                                     parts = []
                                     if has_m and fm: parts.append(f"08:00-{fm}")
                                     
@@ -310,11 +304,9 @@ if uploaded_file:
                                         if has_a and fa: parts.append(f"15:00-{fa}")
                                         if has_e and fe: parts.append(f"18:30-{fe}")
                                     else:
-                                        # 非立丞
                                         if has_m and has_a and not has_e:
                                             if fa: parts.append(f"15:00-{fa}")
                                         elif not has_m and has_a and has_e:
-                                            # 午晚班：若有午班就補上
                                             if fa: parts.insert(0 if not parts else len(parts), f"15:00-{fa}")
                                         elif not has_m and has_a and not has_e:
                                             if fa: parts.append(f"15:00-{fa}")
@@ -323,9 +315,7 @@ if uploaded_file:
                                     
                                     final_val = ",".join(parts)
                                     
-                                    # 若有變動則記錄
                                     if final_val and final_val != cell_val:
-                                        # 直接寫入 (因為已經是確認執行的)
                                         st.session_state.working_df.at[idx, col] = final_val
                                         changes_list.append({
                                             "姓名": name,
@@ -341,7 +331,6 @@ if uploaded_file:
                         with st.expander("查看更新明細"):
                             st.dataframe(pd.DataFrame(changes_list))
                         
-                        # 下載區
                         st.subheader("📥 下載更新後的排班表")
                         c_d1, c_d2, c_d3 = st.columns(3)
                         final_df = st.session_state.working_df
@@ -361,4 +350,4 @@ if uploaded_file:
                         st.warning("比對完成，但沒有發現需要更新的資料 (可能資料一致或時間未達標)。")
 
         except Exception as e:
-            st.error(f"發生錯誤: {e}")
+            st.error(f"分析過程發生錯誤: {e}")
