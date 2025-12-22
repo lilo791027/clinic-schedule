@@ -159,7 +159,7 @@ if uploaded_file:
 
     except Exception as e:
         st.error(f"檔案讀取失敗: {e}")
-        st.stop() # 停止執行避免錯誤擴散
+        st.stop()
 
 # --- 顯示「人員角色儀表板」 ---
 if st.session_state.staff_roles_df is not None:
@@ -216,9 +216,8 @@ st.subheader("步驟 2：上傳完診分析檔並執行")
 
 analysis_file = st.file_uploader("上傳完診結果檔 (Excel/CSV)", type=['xlsx', 'xls', 'csv'])
 
-# 使用 Guard Clause 減少縮排層級
 if not analysis_file:
-    st.stop() # 若無檔案則停止往下執行，介面保持乾淨
+    st.stop()
 
 if st.session_state.staff_roles_df is None:
     st.warning("請先完成步驟 1 的排班表上傳。")
@@ -354,6 +353,8 @@ try:
                     try:
                         c = final_df.to_csv(index=False, encoding='cp950', errors='replace')
                         st.download_button("CSV (Big5)", c, '排班表_Big5.csv', key='dl_csv_b')
+                    except:
+                        st.warning("無法產生 Big5 編碼 CSV，可能含有特殊字元")
             else:
                 st.warning("比對完成，但沒有發現需要更新的資料 (可能資料一致或時間未達標)。")
 
