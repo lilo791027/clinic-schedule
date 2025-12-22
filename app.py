@@ -4,9 +4,11 @@ from datetime import datetime, timedelta
 import io
 import re
 
-# 設定頁面配置
+# ==========================================
+# 頁面基本設定
+# ==========================================
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (醫師預設不勾選版)")
+st.title("🏥 診所行政綜合工具箱 (立丞午診1400版)")
 
 # 側邊欄：全域功能
 with st.sidebar:
@@ -21,12 +23,20 @@ tab1, tab2 = st.tabs(["📅 排班修改工具 (整合回填版)", "⏱️ 完�
 # 通用函式
 # ==========================================
 def smart_date_parser(date_str):
+    """
+    智慧日期解析：支援民國年(1130101)、西元年、斜線或橫線分隔
+    """
     s = str(date_str).strip()
     if s.lower() == 'nan' or not s: return ""
+    # 處理 7 碼民國年 (如 1130101)
     if len(s) == 7 and s.isdigit(): 
         y_roc = int(s[:3])
         return f"{y_roc + 1911}-{s[3:5]}-{s[5:]}"
+    
+    # 移除括號與雜訊
     s_clean = re.sub(r'\(.*?\)', '', s).strip()
+    
+    # 嘗試多種常見格式
     for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%m/%d', '%m-%d', '%Y.%m.%d'):
         try:
             dt = datetime.strptime(s_clean, fmt)
@@ -36,30 +46,43 @@ def smart_date_parser(date_str):
     return s
 
 def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_morning=False):
+    """
+    核心工時計算邏輯
+    - shift_type: "早", "午", "晚"
+    - clinic_name: 判斷是否為 "立丞"
+    - is_special_morning: 是否為純早班人員 (早班到 13:00)
+    """
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None
     try:
         t_str = str(raw_time_str).strip()
-        if isinstance(raw_time_str, datetime) or isinstance(raw_time_str, pd.Timestamp):
+        if isinstance(raw_time_str, (datetime, pd.Timestamp)):
             t = raw_time_str
         else:
-            t = datetime.strptime(t_str, "%H:%M:%S") if len(t_str.split(':')) == 3 else datetime.strptime(t_str, "%H:%M")
+            if len(t_str.split(':')) == 3:
+                t = datetime.strptime(t_str, "%H:%M:%S")
+            else:
+                t = datetime.strptime(t_str, "%H:%M")
         
         base_date = datetime(2000, 1, 1)
-        t = base_date.replace(hour=t.hour, minute=t.minute, second=0) # Normalize date
+        t = base_date.replace(hour=t.hour, minute=t.minute, second=0)
         new_t = t
         is_licheng = "立丞" in str(clinic_name)
 
+        # === 早班規則 ===
         if shift_type == "早":
             std = base_date.replace(hour=13, minute=0) if is_special_morning else base_date.replace(hour=12, minute=0)
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
         
+        # === 午班規則 (已更新立丞邏輯) ===
         elif shift_type == "午":
-            if not is_licheng: return "18:00"
-            std = base_date.replace(hour=17, minute=0)
-            if t > std: new_t = t + timedelta(minutes=5)
-            elif t < std: new_t = std
+            if not is_licheng: 
+                return "18:00" # 非立丞統一 18:00
+            
+            # 立丞午班：結束時間依實際 (不設標準時間，不加 5 分鐘)
+            new_t = t 
 
+        # === 晚班規則 ===
         elif shift_type == "晚":
             std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
             if t > std: new_t = t + timedelta(minutes=5)
@@ -109,12 +132,12 @@ with tab1:
             if df is not None:
                 all_columns = df.columns.tolist()
                 date_cols_in_df = [c for c in df.columns if re.match(r'\d{4}-\d{2}-\d{2}', str(c))]
+                
                 if not date_cols_in_df:
                     excludes = ['姓名', '編號', '班別', 'ID', 'Name', '診所名稱', '來源檔案', '✅選取', 'Unnamed']
                     date_cols_in_df = [c for c in df.columns if not any(ex in str(c) for ex in excludes)]
                 date_cols_in_df.sort()
 
-                # --- 欄位與自動偵測設定 ---
                 with st.expander("⚙️ 欄位與人員設定", expanded=True):
                     c1, c2 = st.columns(2)
                     with c1:
@@ -132,10 +155,8 @@ with tab1:
                     if name_col:
                         all_names = df[name_col].dropna().unique().tolist()
                         
-                        # --- 自動偵測純早班 (全欄位掃描) ---
                         detected_morning_staff = []
                         keywords = ["純早"]
-                        
                         for idx, row in df.iterrows():
                             row_content = " ".join([str(val) for val in row.values if not pd.isna(val)])
                             if any(k in row_content for k in keywords):
@@ -148,13 +169,12 @@ with tab1:
                             "🕰️ 設定「純早班」人員 (08:00-13:00)", 
                             options=all_names,
                             default=detected_morning_staff,
-                            help="選取的人員，其「早班」時段將以 13:00 為基準。"
+                            help="選取的人員，其「早班」時段將以 13:00 為基準，且排班修正預設不勾選。"
                         )
                     else:
                         all_names = []
                         special_morning_staff = []
 
-                # --- 自動回填邏輯 ---
                 st.markdown("---")
                 st.subheader("2. 依照完診分析自動更新")
                 analysis_file = st.file_uploader("請上傳完診結果檔", type=['xlsx', 'xls', 'csv'], key="tab1_analysis")
@@ -186,21 +206,18 @@ with tab1:
 
                                 for idx, row in df.iterrows():
                                     is_special = row[name_col] in special_morning_staff
-                                    
-                                    # 判斷是否為醫師 (檢查整列資料或當下Cell內容)
                                     row_content_str = " ".join([str(v) for v in row.values if not pd.isna(v)])
-                                    is_doctor_row = "醫師" in row_content_str # 簡易判斷：整列有醫師字眼
+                                    is_doctor_row = "醫師" in row_content_str 
 
                                     for col in dates_to_check:
                                         if col in time_map:
                                             cell_val = str(row[col]).strip()
-                                            
-                                            # 二次確認：當下Cell是否有"醫師"字眼 (避免誤判)
-                                            # 根據截圖，醫師的班別通常帶有 ★醫師★ 
                                             is_doctor_cell = "醫師" in cell_val or is_doctor_row
                                             
-                                            # 設定預設執行狀態：若是醫師則 False，否則 True
-                                            default_execute = False if is_doctor_cell else True
+                                            if is_doctor_cell or is_special:
+                                                default_execute = False
+                                            else:
+                                                default_execute = True
 
                                             if cell_val and cell_val.lower()!='nan':
                                                 shifts = re.split(r'[,\n\s]', cell_val)
@@ -228,7 +245,8 @@ with tab1:
                                                 if has_m and fm: parts.append(f"08:00-{fm}")
                                                 
                                                 if is_licheng:
-                                                    if has_a and fa: parts.append(f"15:00-{fa}")
+                                                    # 立丞午診：開始時間 14:00，結束時間依實際
+                                                    if has_a and fa: parts.append(f"14:00-{fa}")
                                                     if has_e and fe: parts.append(f"18:30-{fe}")
                                                 else:
                                                     if has_m and has_a and not has_e:
@@ -243,6 +261,7 @@ with tab1:
                                                         if fe: parts.append(f"18:30-{fe}")
                                                 
                                                 final_val = ",".join(parts)
+                                                
                                                 if final_val and final_val != cell_val:
                                                     changes_list.append({
                                                         "✅執行": default_execute, 
@@ -254,11 +273,9 @@ with tab1:
 
                                 if changes_list:
                                     st.session_state['preview_df'] = pd.DataFrame(changes_list)
-                                    
-                                    # 計算預設勾選數量
                                     checked_count = len([x for x in changes_list if x['✅執行']])
                                     skipped_count = len(changes_list) - checked_count
-                                    st.success(f"找到 {len(changes_list)} 筆資料可更新。(其中 {skipped_count} 筆醫師資料已預設不勾選)")
+                                    st.success(f"找到 {len(changes_list)} 筆資料可更新。(其中 {skipped_count} 筆資料為 [醫師/純早班]，已預設不勾選)")
                                 else: 
                                     st.session_state['preview_df'] = None
                                     st.warning("無資料需要更新。")
@@ -276,7 +293,6 @@ with tab1:
 
                     except Exception as e: st.error(f"錯誤: {e}")
 
-            # --- 下載區塊 ---
             st.markdown("---")
             c1, c2, c3 = st.columns(3)
             with c1:
