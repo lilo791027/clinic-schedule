@@ -8,7 +8,7 @@ import re
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (立丞午診1400版)")
+st.title("🏥 診所行政綜合工具箱 (立丞午診修正版)")
 
 # 側邊欄：全域功能
 with st.sidebar:
@@ -74,13 +74,21 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
         
-        # === 午班規則 (已更新立丞邏輯) ===
+        # === 午班規則 (立丞邏輯更新) ===
         elif shift_type == "午":
             if not is_licheng: 
                 return "18:00" # 非立丞統一 18:00
             
-            # 立丞午班：結束時間依實際 (不設標準時間，不加 5 分鐘)
-            new_t = t 
+            # 立丞午班規則：
+            # 基準時間 17:00
+            std = base_date.replace(hour=17, minute=0)
+            
+            if t > std: 
+                # 超過 17:00 -> 加 5 分鐘
+                new_t = t + timedelta(minutes=5)
+            else: 
+                # 提早或準時 -> 補滿至 17:00
+                new_t = std
 
         # === 晚班規則 ===
         elif shift_type == "晚":
@@ -245,7 +253,7 @@ with tab1:
                                                 if has_m and fm: parts.append(f"08:00-{fm}")
                                                 
                                                 if is_licheng:
-                                                    # 立丞午診：開始時間 14:00，結束時間依實際
+                                                    # 立丞午診：開始 14:00，結束依規則 (17:00 或 +5分)
                                                     if has_a and fa: parts.append(f"14:00-{fa}")
                                                     if has_e and fe: parts.append(f"18:30-{fe}")
                                                 else:
