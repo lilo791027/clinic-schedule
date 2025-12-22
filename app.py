@@ -260,10 +260,7 @@ with tab1:
                                             cell_val = str(row[col]).strip()
                                             is_doctor_cell = "醫師" in cell_val or is_doctor_row
                                             
-                                            # 🔴 (原本的預設邏輯已刪除，移到後方計算後判定)
-
                                             if cell_val and cell_val.lower()!='nan':
-                                                # 分析原始格子內的班別
                                                 shifts = re.split(r'[,\n\s]', cell_val)
                                                 has_m, has_a, has_e = False, False, False
                                                 for s in shifts:
@@ -285,17 +282,13 @@ with tab1:
                                                 fa = calculate_time_rule(vals['午'], "午", selected_clinic) if has_a else None
                                                 fe = calculate_time_rule(vals['晚'], "晚", selected_clinic) if has_e else None
                                                 
-                                                # === 🟢 根據是否延診決定預設勾選 ===
-                                                # 1. 定義標準/準時時間
+                                                # === 延診判定 ===
                                                 std_times = ["12:00", "13:00", "17:00", "18:00", "21:00", "21:30"]
-
-                                                # 2. 檢查是否有延診
                                                 has_delay = False
                                                 if fm and fm not in std_times: has_delay = True
                                                 if fa and fa not in std_times: has_delay = True
                                                 if fe and fe not in std_times: has_delay = True
 
-                                                # 3. 設定勾選邏輯
                                                 if is_doctor_cell or is_special:
                                                     default_execute = False
                                                 elif has_delay:
@@ -450,36 +443,70 @@ with tab2:
                     final = final[base + shifts].fillna("")
                     final = final.sort_values(by=d_c)
                     
-                    # === 延診偵測 & 修正時間邏輯 ===
+                    # === 建構符合使用者要求的「原始 vs 修正」並列報表 ===
+                    export_rows = []
                     delayed_records = []
-                    mod = final.copy()
+
+                    # 偵測對應欄位 (假設 shifts 裡包含 早/午/晚 關鍵字)
+                    col_m = next((c for c in shifts if "早" in c), None)
+                    col_a = next((c for c in shifts if "午" in c), None)
+                    col_e = next((c for c in shifts if "晚" in c), None)
                     
                     for idx, row in final.iterrows():
                         clinic = row['診所名稱']
                         date_val = row[d_c]
                         
-                        for col in shifts:
-                            raw_time = str(row[col]).strip()
-                            if not raw_time: continue
-                            
-                            shift_type = "早" if "早" in col else "午" if "午" in col else "晚"
-                            time_obj = parse_time_obj(raw_time)
-                            
-                            if time_obj:
-                                # 1. 檢查是否延診
-                                is_delayed, limit_str = check_is_delayed(time_obj, shift_type, clinic)
-                                if is_delayed:
-                                    delayed_records.append({
-                                        "日期": date_val,
-                                        "診所": clinic,
-                                        "班別": shift_type,
-                                        "標準時間": limit_str,
-                                        "實際完診": time_obj.strftime("%H:%M"),
-                                        "狀態": "⚠️ 延診"
-                                    })
-                                
-                                # 2. 計算修正後時間 (寫入 mod)
-                                mod.at[idx, col] = calculate_time_rule(time_obj, shift_type, clinic) or raw_time
+                        # 取得原始值 (字串)
+                        raw_m = str(row[col_m]).strip() if col_m and pd.notna(row[col_m]) else ""
+                        raw_a = str(row[col_a]).strip() if col_a and pd.notna(row[col_a]) else ""
+                        raw_e = str(row[col_e]).strip() if col_e and pd.notna(row[col_e]) else ""
+                        
+                        # 計算修正值 & 偵測延診
+                        fix_m, fix_a, fix_e = "", "", ""
+
+                        # --- 早上處理 ---
+                        if raw_m and raw_m.lower()!='nan':
+                            t = parse_time_obj(raw_m)
+                            if t:
+                                is_d, lim = check_is_delayed(t, "早", clinic)
+                                if is_d:
+                                    delayed_records.append({"日期": date_val, "診所": clinic, "班別": "早", "標準時間": lim, "實際完診": t.strftime("%H:%M"), "狀態": "⚠️ 延診"})
+                                fix_m = calculate_time_rule(raw_m, "早", clinic) or raw_m
+                        
+                        # --- 下午處理 ---
+                        if raw_a and raw_a.lower()!='nan':
+                            t = parse_time_obj(raw_a)
+                            if t:
+                                is_d, lim = check_is_delayed(t, "午", clinic)
+                                if is_d:
+                                    delayed_records.append({"日期": date_val, "診所": clinic, "班別": "午", "標準時間": lim, "實際完診": t.strftime("%H:%M"), "狀態": "⚠️ 延診"})
+                                fix_a = calculate_time_rule(raw_a, "午", clinic) or raw_a
+
+                        # --- 晚上處理 ---
+                        if raw_e and raw_e.lower()!='nan':
+                            t = parse_time_obj(raw_e)
+                            if t:
+                                is_d, lim = check_is_delayed(t, "晚", clinic)
+                                if is_d:
+                                    delayed_records.append({"日期": date_val, "診所": clinic, "班別": "晚", "標準時間": lim, "實際完診": t.strftime("%H:%M"), "狀態": "⚠️ 延診"})
+                                fix_e = calculate_time_rule(raw_e, "晚", clinic) or raw_e
+
+                        # 加入匯出清單
+                        export_rows.append({
+                            "診所名稱": clinic,
+                            "日期": date_val,
+                            "早上(原始)": raw_m if raw_m and raw_m.lower()!='nan' else "",
+                            "早上": fix_m,
+                            "下午(原始)": raw_a if raw_a and raw_a.lower()!='nan' else "",
+                            "下午": fix_a,
+                            "晚上(原始)": raw_e if raw_e and raw_e.lower()!='nan' else "",
+                            "晚上": fix_e
+                        })
+
+                    # 轉為 DataFrame
+                    df_export = pd.DataFrame(export_rows)
+                    cols_order = ["診所名稱", "日期", "早上(原始)", "早上", "下午(原始)", "下午", "晚上(原始)", "晚上"]
+                    df_export = df_export[cols_order]
 
                     # === 顯示結果 ===
                     st.success(f"分析完成！共處理 {len(res)} 個檔案。")
@@ -489,27 +516,27 @@ with tab2:
                     st.subheader("🚨 延診異常偵測報告")
                     if delayed_records:
                         df_delay = pd.DataFrame(delayed_records)
-                        # 依照日期排序
                         df_delay = df_delay.sort_values(by="日期")
-                        
                         st.error(f"注意！偵測到 {len(df_delay)} 筆延診紀錄：")
                         st.dataframe(df_delay, use_container_width=True)
-                        
-                        # (已移除下載按鈕)
                     else:
                         st.success("🎉 太棒了！本批資料完全沒有延診紀錄。")
                     
                     st.markdown("---")
                     
-                    # 下載區
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        o = io.BytesIO()
-                        with pd.ExcelWriter(o, engine='openpyxl') as w: final.to_excel(w, index=False)
-                        st.download_button("📥 原始完診總表", o.getvalue(), '原始完診總表.xlsx')
-                    with c2:
-                        o = io.BytesIO()
-                        with pd.ExcelWriter(o, engine='openpyxl') as w: mod.to_excel(w, index=False)
-                        st.download_button("📥 修正完診總表", o.getvalue(), '修正完診總表.xlsx', type="primary")
+                    # 下載區 (只提供一個合併好的檔案)
+                    st.subheader("📥 下載分析結果")
+                    o = io.BytesIO()
+                    with pd.ExcelWriter(o, engine='openpyxl') as w: 
+                        df_export.to_excel(w, index=False)
+                    
+                    st.download_button(
+                        label="📥 下載完整分析報表 (.xlsx)",
+                        data=o.getvalue(),
+                        file_name='完診分析報表_含原始與修正.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        type="primary"
+                    )
+
         except Exception as e: 
             st.error(f"發生錯誤: {e}")
