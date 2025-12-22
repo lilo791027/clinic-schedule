@@ -285,34 +285,31 @@ with tab1:
                                                 fa = calculate_time_rule(vals['午'], "午", selected_clinic) if has_a else None
                                                 fe = calculate_time_rule(vals['晚'], "晚", selected_clinic) if has_e else None
                                                 
-                                                # === 🟢 修改開始：根據是否延診決定預設勾選 ===
-                                                # 1. 定義標準/準時時間 (包含純早班的 13:00)
+                                                # === 🟢 根據是否延診決定預設勾選 ===
+                                                # 1. 定義標準/準時時間
                                                 std_times = ["12:00", "13:00", "17:00", "18:00", "21:00", "21:30"]
 
-                                                # 2. 檢查是否有延診 (若算出的時間不在標準時間清單內，視為延診)
+                                                # 2. 檢查是否有延診
                                                 has_delay = False
                                                 if fm and fm not in std_times: has_delay = True
                                                 if fa and fa not in std_times: has_delay = True
                                                 if fe and fe not in std_times: has_delay = True
 
-                                                # 3. 設定勾選邏輯：只有「有延診」才預設 True
+                                                # 3. 設定勾選邏輯
                                                 if is_doctor_cell or is_special:
                                                     default_execute = False
                                                 elif has_delay:
                                                     default_execute = True
                                                 else:
                                                     default_execute = False
-                                                # === 🟢 修改結束 ===
-
+                                                
                                                 parts = []
                                                 if has_m and fm: parts.append(f"08:00-{fm}")
                                                 
                                                 if is_licheng:
-                                                    # 立丞午診特殊顯示
                                                     if has_a and fa: parts.append(f"14:00-{fa}")
                                                     if has_e and fe: parts.append(f"18:30-{fe}")
                                                 else:
-                                                    # 一般診所排版邏輯
                                                     if has_m and has_a and not has_e:
                                                         if fa: parts.append(f"15:00-{fa}")
                                                     elif not has_m and has_a and has_e:
@@ -498,9 +495,7 @@ with tab2:
                         st.error(f"注意！偵測到 {len(df_delay)} 筆延診紀錄：")
                         st.dataframe(df_delay, use_container_width=True)
                         
-                        # 下載延診報告
-                        csv_delay = df_delay.to_csv(index=False, encoding='utf-8-sig')
-                        st.download_button("📥 下載延診清單 (.csv)", csv_delay, "延診清單.csv", "text/csv")
+                        # (已移除下載按鈕)
                     else:
                         st.success("🎉 太棒了！本批資料完全沒有延診紀錄。")
                     
