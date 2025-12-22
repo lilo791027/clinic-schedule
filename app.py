@@ -57,9 +57,6 @@ def smart_date_parser(date_str):
     return s
 
 def calculate_time_rule(raw_time_str, shift_type, clinic_name, role):
-    """
-    回傳: (修正後時間字串, 是否延診Boolean)
-    """
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None, False
     try:
         t_str = str(raw_time_str).strip()
@@ -74,19 +71,14 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, role):
         is_licheng = "立丞" in str(clinic_name)
         is_pure_morning = (role == "🌅 純早班")
         
-        # 設定標準時間
         if shift_type == "早":
             std = base_date.replace(hour=13, minute=0) if is_pure_morning else base_date.replace(hour=12, minute=0)
         elif shift_type == "午":
-            if not is_licheng: 
-                # 非立丞午診固定 18:00 (視為永不延診)
-                return "18:00", False 
-            # 立丞午診標準結束時間 (若開始是14:00，標準結束設為17:00，超過才算延診)
+            if not is_licheng: return "18:00", False 
             std = base_date.replace(hour=17, minute=0)
         elif shift_type == "晚":
             std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
         
-        # 判斷是否延診 (依實際時間)
         if t > std:
             new_t = t + timedelta(minutes=5)
             return new_t.strftime("%H:%M"), True
@@ -232,6 +224,11 @@ with tab_main:
         except Exception as e:
             st.error(f"檔案讀取失敗: {e}")
             st.stop()
+    
+    # --- 新增功能：顯示排班表預覽 ---
+    if st.session_state.working_df is not None:
+        with st.expander("📅 點擊展開/收合原始排班表預覽", expanded=True):
+            st.dataframe(st.session_state.working_df, use_container_width=True)
 
     if st.session_state.staff_roles_df is not None:
         st.info("👇 系統已自動判斷身分，請在下方表格確認 (若判斷正確則無需更動)：")
@@ -344,11 +341,9 @@ with tab_main:
                                 parts = []
                                 if has_m and fm: parts.append(f"08:00-{fm}")
                                 if is_licheng:
-                                    # 立丞午診: 14:00 開始
                                     if has_a and fa: parts.append(f"14:00-{fa}") 
                                     if has_e and fe: parts.append(f"18:30-{fe}")
                                 else:
-                                    # 其他診所: 午診固定 15:00 開始
                                     if has_m and has_a and not has_e:
                                         if fa: parts.append(f"15:00-{fa}")
                                     elif not has_m and has_a and has_e:
