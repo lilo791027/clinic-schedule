@@ -279,7 +279,7 @@ with tab1:
         except Exception as e: st.error(f"發生錯誤: {e}")
 
 # ==========================================
-# 分頁 2: 完診分析 (維持原樣)
+# 分頁 2: 完診分析 (修復缺失的 except 區塊)
 # ==========================================
 with tab2:
     st.header("批次完診分析")
@@ -371,3 +371,5 @@ with tab2:
                         o = io.BytesIO()
                         with pd.ExcelWriter(o, engine='openpyxl') as w: mod.to_excel(w, index=False)
                         st.download_button("📥 修正完診總表", o.getvalue(), '修正完診總表.xlsx', type="primary")
+        except Exception as e: 
+            st.error(f"發生錯誤: {e}")
