@@ -235,7 +235,6 @@ with tab1:
                             clinics = df_ana['診所名稱'].unique().tolist()
                             c_a, c_b = st.columns(2)
                             with c_a: selected_clinic = st.selectbox("A. 選擇診所：", clinics)
-                            # 🔥 這裡更新了提示文字
                             with c_b: target_dates = st.multiselect("B. 選擇日期 (⚠️留空即代表「自動檢查所有日期」)：", options=date_cols_in_df)
 
                             if st.button("🔍 產生預覽", type="primary"):
@@ -248,7 +247,6 @@ with tab1:
                                 time_map = {smart_date_parser(r['日期']): {'早': r.get(col_m), '午': r.get(col_a), '晚': r.get(col_e)} for _, r in df_target.iterrows()}
 
                                 changes_list = []
-                                # 這裡實作了留空即全選的邏輯
                                 dates_to_check = target_dates if target_dates else date_cols_in_df
                                 is_licheng = "立丞" in str(selected_clinic)
 
@@ -262,11 +260,7 @@ with tab1:
                                             cell_val = str(row[col]).strip()
                                             is_doctor_cell = "醫師" in cell_val or is_doctor_row
                                             
-                                            # 判斷是否預設執行
-                                            if is_doctor_cell or is_special:
-                                                default_execute = False
-                                            else:
-                                                default_execute = True
+                                            # 🔴 (原本的預設邏輯已刪除，移到後方計算後判定)
 
                                             if cell_val and cell_val.lower()!='nan':
                                                 # 分析原始格子內的班別
@@ -291,6 +285,25 @@ with tab1:
                                                 fa = calculate_time_rule(vals['午'], "午", selected_clinic) if has_a else None
                                                 fe = calculate_time_rule(vals['晚'], "晚", selected_clinic) if has_e else None
                                                 
+                                                # === 🟢 修改開始：根據是否延診決定預設勾選 ===
+                                                # 1. 定義標準/準時時間 (包含純早班的 13:00)
+                                                std_times = ["12:00", "13:00", "17:00", "18:00", "21:00", "21:30"]
+
+                                                # 2. 檢查是否有延診 (若算出的時間不在標準時間清單內，視為延診)
+                                                has_delay = False
+                                                if fm and fm not in std_times: has_delay = True
+                                                if fa and fa not in std_times: has_delay = True
+                                                if fe and fe not in std_times: has_delay = True
+
+                                                # 3. 設定勾選邏輯：只有「有延診」才預設 True
+                                                if is_doctor_cell or is_special:
+                                                    default_execute = False
+                                                elif has_delay:
+                                                    default_execute = True
+                                                else:
+                                                    default_execute = False
+                                                # === 🟢 修改結束 ===
+
                                                 parts = []
                                                 if has_m and fm: parts.append(f"08:00-{fm}")
                                                 
@@ -326,7 +339,7 @@ with tab1:
                                     st.session_state['preview_df'] = pd.DataFrame(changes_list)
                                     checked_count = len([x for x in changes_list if x['✅執行']])
                                     skipped_count = len(changes_list) - checked_count
-                                    st.success(f"找到 {len(changes_list)} 筆資料可更新。(其中 {skipped_count} 筆資料為 [醫師/純早班]，已預設不勾選)")
+                                    st.success(f"找到 {len(changes_list)} 筆資料可更新。(其中 {checked_count} 筆延診需確認，{skipped_count} 筆準時/醫師/純早班預設不勾選)")
                                 else: 
                                     st.session_state['preview_df'] = None
                                     st.warning("無資料需要更新。")
@@ -469,7 +482,6 @@ with tab2:
                                     })
                                 
                                 # 2. 計算修正後時間 (寫入 mod)
-                                # 注意：此處需將 time_obj 轉回 string 或直接傳入 calculate_time_rule
                                 mod.at[idx, col] = calculate_time_rule(time_obj, shift_type, clinic) or raw_time
 
                     # === 顯示結果 ===
