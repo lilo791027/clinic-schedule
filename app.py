@@ -6,7 +6,7 @@ import re
 
 # 設定頁面配置
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (全欄位偵測版)")
+st.title("🏥 診所行政綜合工具箱 (午診規則修正版)")
 
 # 側邊欄：全域功能
 with st.sidebar:
@@ -50,18 +50,26 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
         is_licheng = "立丞" in str(clinic_name)
 
         if shift_type == "早":
-            # 若判斷為純早班人員，早班基準改為 13:00
+            # 純早班基準 13:00，一般班 12:00
             std = base_date.replace(hour=13, minute=0) if is_special_morning else base_date.replace(hour=12, minute=0)
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
+        
         elif shift_type == "午":
-            std = base_date.replace(hour=17, minute=0) if is_licheng else base_date.replace(hour=18, minute=0)
+            # --- 修改重點：非立丞診所固定為 18:00 ---
+            if not is_licheng:
+                return "18:00" # 強制回傳固定結束時間
+            
+            # 立丞診所維持動態計算 (依實際時間)
+            std = base_date.replace(hour=17, minute=0) # 立丞午診基準 17:00
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
+
         elif shift_type == "晚":
             std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
+            
         return new_t.strftime("%H:%M")
     except: return None
 
@@ -129,21 +137,19 @@ with tab1:
                     if name_col:
                         all_names = df[name_col].dropna().unique().tolist()
                         
-                        # --- 自動偵測邏輯 (全欄位掃描修正版) ---
+                        # --- 自動偵測邏輯 ---
                         detected_morning_staff = []
-                        keywords = ["純早"] # 關鍵字
+                        keywords = ["純早"]
                         
                         for idx, row in df.iterrows():
-                            # 修正：現在掃描「整列」所有欄位 (包含日期欄位)
-                            # 將整列資料轉為單一字串進行搜尋
+                            # 掃描整列 (含日期欄位)
                             row_content = " ".join([str(val) for val in row.values if not pd.isna(val)])
-                            
                             if any(k in row_content for k in keywords):
                                 if row[name_col] not in detected_morning_staff:
                                     detected_morning_staff.append(row[name_col])
 
                         st.markdown("---")
-                        st.write("🕵️ **自動偵測結果：** 掃描**所有欄位（含日期格）**，若出現「純早」即選取。")
+                        st.write("🕵️ **自動偵測結果：**")
                         special_morning_staff = st.multiselect(
                             "🕰️ 設定「純早班」人員 (08:00-13:00)", 
                             options=all_names,
@@ -151,9 +157,7 @@ with tab1:
                             help="選取的人員，其「早班」時段將以 13:00 為基準。(午、晚班規則不變)"
                         )
                         if detected_morning_staff:
-                            st.caption(f"✅ 已自動選取 {len(detected_morning_staff)} 位人員 (如：高瑜彤, 陳藝萱...)")
-                        else:
-                            st.caption("⚠️ 未偵測到「純早」關鍵字。")
+                            st.caption(f"✅ 已自動選取 {len(detected_morning_staff)} 位人員")
                     else:
                         all_names = []
                         special_morning_staff = []
@@ -211,22 +215,33 @@ with tab1:
                                                         except: pass
                                                 
                                                 vals = time_map[col]
+                                                # 計算與格式化
                                                 fm = calculate_time_rule(vals['早'], "早", selected_clinic, is_special) if has_m else None
                                                 fa = calculate_time_rule(vals['午'], "午", selected_clinic) if has_a else None
                                                 fe = calculate_time_rule(vals['晚'], "晚", selected_clinic) if has_e else None
                                                 
                                                 parts = []
                                                 if has_m and fm: parts.append(f"08:00-{fm}")
+                                                
+                                                # 午班顯示邏輯
                                                 if is_licheng:
                                                     if has_a and fa: parts.append(f"15:00-{fa}")
                                                     if has_e and fe: parts.append(f"18:30-{fe}")
                                                 else:
+                                                    # 非立丞：午班固定 15:00-18:00 (fa已在函式中固定為18:00)
                                                     if has_m and has_a and not has_e:
                                                         if fa: parts.append(f"15:00-{fa}")
                                                     elif not has_m and has_a and has_e:
-                                                        if fe: parts.append(f"15:00-{fe}")
+                                                        if fe: parts.append(f"15:00-{fe}") # 午晚: 這裡只加晚班? 根據需求，午晚班通常要顯示午班
+                                                        # 修正：午晚班若有午班，應該要顯示午班
+                                                        if fa: parts.insert(0 if not parts else len(parts), f"15:00-{fa}")
                                                     elif has_m and has_a and has_e:
-                                                        if fe: parts.append(f"15:00-{fe}")
+                                                        if fe: parts.append(f"15:00-{fe}") # 全天通常會被壓縮顯示? 這裡保留您的邏輯
+                                                        # 若是全天，通常需要顯示中間段嗎？
+                                                        # 原本邏輯：全天 -> 只顯示早跟晚(15:00-21:30)? 
+                                                        # 根據您的舊程式碼： elif has_m and has_a and has_e: if final_e: new_parts.append(f"15:00-{final_e}")
+                                                        # 這看起來是把午晚接在一起變成 15:00-晚迄。
+                                                        pass 
                                                     elif not has_m and has_a and not has_e:
                                                         if fa: parts.append(f"15:00-{fa}")
                                                     elif not has_m and not has_a and has_e:
@@ -276,7 +291,7 @@ with tab1:
         except Exception as e: st.error(f"發生錯誤: {e}")
 
 # ==========================================
-# 分頁 2: 完診分析 (邏輯維持原樣)
+# 分頁 2: 完診分析
 # ==========================================
 with tab2:
     st.header("批次完診分析")
