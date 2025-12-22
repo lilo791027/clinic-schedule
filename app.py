@@ -6,7 +6,7 @@ import re
 
 # 設定頁面配置
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (複合文字強力偵測版)")
+st.title("🏥 診所行政綜合工具箱 (全欄位偵測版)")
 
 # 側邊欄：全域功能
 with st.sidebar:
@@ -50,7 +50,7 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
         is_licheng = "立丞" in str(clinic_name)
 
         if shift_type == "早":
-            # 若判斷為純早班人員，早班基準改為 13:00 (無論有無午晚班，早班規則都獨立套用)
+            # 若判斷為純早班人員，早班基準改為 13:00
             std = base_date.replace(hour=13, minute=0) if is_special_morning else base_date.replace(hour=12, minute=0)
             if t > std: new_t = t + timedelta(minutes=5)
             elif t < std: new_t = std
@@ -112,7 +112,7 @@ with tab1:
                 date_cols_in_df.sort()
 
                 # --- 欄位與自動偵測設定 ---
-                with st.expander("⚙️ 欄位與人員設定 (強力偵測「純早」)", expanded=True):
+                with st.expander("⚙️ 欄位與人員設定 (全欄位偵測「純早」)", expanded=True):
                     c1, c2 = st.columns(2)
                     with c1:
                         default_name = next((c for c in all_columns if "姓名" in c), all_columns[1] if len(all_columns)>1 else all_columns[0])
@@ -129,22 +129,21 @@ with tab1:
                     if name_col:
                         all_names = df[name_col].dropna().unique().tolist()
                         
-                        # --- 自動偵測邏輯 (全面掃描版) ---
-                        # 掃描範圍：所有非日期欄位 (包含姓名欄，以防備註寫在名字裡)
-                        check_cols = [c for c in all_columns if c not in date_cols_in_df]
-                        
+                        # --- 自動偵測邏輯 (全欄位掃描修正版) ---
                         detected_morning_staff = []
                         keywords = ["純早"] # 關鍵字
                         
                         for idx, row in df.iterrows():
-                            # 檢查該列內容，若包含「純早」(如：板土中京純早、午班) 則命中
-                            row_content = " ".join([str(row[c]) for c in check_cols if not pd.isna(row[c])])
+                            # 修正：現在掃描「整列」所有欄位 (包含日期欄位)
+                            # 將整列資料轉為單一字串進行搜尋
+                            row_content = " ".join([str(val) for val in row.values if not pd.isna(val)])
+                            
                             if any(k in row_content for k in keywords):
                                 if row[name_col] not in detected_morning_staff:
                                     detected_morning_staff.append(row[name_col])
 
                         st.markdown("---")
-                        st.write("🕵️ **自動偵測結果：** 只要該列資料出現 **「純早」** 字眼 (例如：板土中京純早...) 即會選取。")
+                        st.write("🕵️ **自動偵測結果：** 掃描**所有欄位（含日期格）**，若出現「純早」即選取。")
                         special_morning_staff = st.multiselect(
                             "🕰️ 設定「純早班」人員 (08:00-13:00)", 
                             options=all_names,
@@ -152,9 +151,9 @@ with tab1:
                             help="選取的人員，其「早班」時段將以 13:00 為基準。(午、晚班規則不變)"
                         )
                         if detected_morning_staff:
-                            st.caption(f"✅ 已自動選取 {len(detected_morning_staff)} 位人員")
+                            st.caption(f"✅ 已自動選取 {len(detected_morning_staff)} 位人員 (如：高瑜彤, 陳藝萱...)")
                         else:
-                            st.caption("⚠️ 未偵測到「純早」關鍵字，請確認 Excel 或手動選擇。")
+                            st.caption("⚠️ 未偵測到「純早」關鍵字。")
                     else:
                         all_names = []
                         special_morning_staff = []
@@ -212,7 +211,6 @@ with tab1:
                                                         except: pass
                                                 
                                                 vals = time_map[col]
-                                                # 關鍵：將 is_special (是否純早) 傳入早班計算
                                                 fm = calculate_time_rule(vals['早'], "早", selected_clinic, is_special) if has_m else None
                                                 fa = calculate_time_rule(vals['午'], "午", selected_clinic) if has_a else None
                                                 fe = calculate_time_rule(vals['晚'], "晚", selected_clinic) if has_e else None
@@ -223,7 +221,6 @@ with tab1:
                                                     if has_a and fa: parts.append(f"15:00-{fa}")
                                                     if has_e and fe: parts.append(f"18:30-{fe}")
                                                 else:
-                                                    # 非立丞邏輯
                                                     if has_m and has_a and not has_e:
                                                         if fa: parts.append(f"15:00-{fa}")
                                                     elif not has_m and has_a and has_e:
@@ -279,7 +276,7 @@ with tab1:
         except Exception as e: st.error(f"發生錯誤: {e}")
 
 # ==========================================
-# 分頁 2: 完診分析 (修復缺失的 except 區塊)
+# 分頁 2: 完診分析 (邏輯維持原樣)
 # ==========================================
 with tab2:
     st.header("批次完診分析")
