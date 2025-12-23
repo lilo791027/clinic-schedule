@@ -3,85 +3,21 @@ import pandas as pd
 from datetime import datetime, timedelta
 import io
 import re
-from openpyxl.styles import Alignment, PatternFill
+from openpyxl.styles import Alignment, Font 
 import csv
 
 # ==========================================
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (完整版)")
+st.title("🏥 診所行政綜合工具箱 (多格式輸出版)")
 
 # ==========================================
-# 側邊欄：格式偵探 & 設定
+# 側邊欄
 # ==========================================
 with st.sidebar:
-    st.header("🕵️ 格式偵探 (Tab 1 專用)")
-    st.info("如果不確定系統要什麼格式，請在此上傳「系統原本匯出且正常的檔案」，我幫您分析！")
-    
-    detect_file = st.file_uploader("上傳正常的排班表 (偵測用)", type=['csv', 'xlsx', 'xls'], key="detect_uploader")
-    
-    detected_sep = "空白 (Space)" # 預設
-    detected_conn = "減號 (-)"    # 預設
-    
-    if detect_file is not None:
-        try:
-            detect_file.seek(0)
-            if detect_file.name.lower().endswith('.csv'):
-                try: df_d = pd.read_csv(detect_file, encoding='cp950', dtype=str)
-                except: 
-                    detect_file.seek(0)
-                    df_d = pd.read_csv(detect_file, encoding='utf-8', dtype=str)
-            else:
-                df_d = pd.read_excel(detect_file, dtype=str)
-            
-            found_sample = False
-            for col in df_d.columns:
-                for val in df_d[col].dropna():
-                    val_str = str(val)
-                    if len(val_str) > 10 and any(char.isdigit() for char in val_str):
-                        if "\n" in val_str:
-                            detected_sep = "換行 (Alt+Enter)"
-                            st.success(f"🔍 偵測到：多時段使用「換行」分隔")
-                        elif " " in val_str and not "\n" in val_str:
-                            detected_sep = "空白 (Space)"
-                            st.success(f"🔍 偵測到：多時段使用「空白」分隔")
-                        
-                        if "~" in val_str:
-                            detected_conn = "波浪號 (~)"
-                            st.success(f"🔍 偵測到：時間連接使用「波浪號 ~」")
-                        elif "-" in val_str:
-                            detected_conn = "減號 (-)"
-                            st.success(f"🔍 偵測到：時間連接使用「減號 -」")
-                        
-                        st.code(f"原始內容範例:\n{repr(val_str)}", language="python")
-                        found_sample = True
-                        break
-                if found_sample: break
-            
-            if not found_sample:
-                st.warning("⚠️ 找不到明顯的時間資料，請手動選擇下方設定。")
-                
-        except Exception as e:
-            st.error(f"偵測失敗: {e}")
-
-    st.markdown("---")
-    st.header("⚙️ 匯出格式設定")
-    
-    sep_options = ["空白 (Space)", "換行 (Alt+Enter)", "逗號 (,)", "分號 (;)"]
-    sep_index = sep_options.index(detected_sep) if detected_sep in sep_options else 0
-    sep_option = st.selectbox("1. 多時段「分隔」符號", sep_options, index=sep_index)
-    
-    conn_options = ["減號 (-)", "波浪號 (~)", "無符號 (08001200)"]
-    conn_index = conn_options.index(detected_conn) if detected_conn in conn_options else 0
-    conn_option = st.selectbox("2. 時間「連接」符號", conn_options, index=conn_index)
-
-    sep_map = {"空白 (Space)": " ", "換行 (Alt+Enter)": "\n", "逗號 (,)": ",", "分號 (;)": ";"}
-    conn_map = {"減號 (-)": "-", "波浪號 (~)": "~", "無符號 (08001200)": ""}
-    
-    selected_sep = sep_map[sep_option]
-    selected_conn = conn_map[conn_option]
-
+    st.header("🔧 系統功能")
+    st.info("若匯入後顯示 08:00-08:00，請使用頁面底部的「格式 A (換行)」或「格式 C (逗號)」進行測試。")
     if st.button("🔄 清除所有快取與狀態"):
         st.session_state.clear()
         st.rerun()
@@ -175,10 +111,46 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
             
     return new_t.strftime("%H:%M")
 
-def format_time_range(start_str, end_str, connector):
+def format_time_range(start_str, end_str, connector="-"):
     if connector == "": 
         return f"{start_str.replace(':','')}{end_str.replace(':','')}"
     return f"{start_str}{connector}{end_str}"
+
+# 專門產生 Excel 的函式 (支援多種分隔符號)
+def generate_excel_bytes(df, separator, connector="-"):
+    output = io.BytesIO()
+    
+    # 建立一個暫存的 DataFrame 進行字串組合
+    df_export = df.copy()
+    
+    # 找出所有日期欄位
+    date_cols = [c for c in df_export.columns if re.match(r'\d{4}-\d{2}-\d{2}', str(c))]
+    
+    # 針對每個日期欄位，重新組合字串 (因為 session_state 裡可能已經是舊格式)
+    # 我們需要從「原始內容」重新解析，或假設 session_state 裡的內容是乾淨的
+    # 這裡簡單處理：假設 df 裡的內容已經是處理過的字串，我們只需替換分隔符號
+    # 但為了保險，我們針對特定字符做替換
+    
+    for col in date_cols:
+        df_export[col] = df_export[col].astype(str).apply(lambda x: x.replace("\n", separator).replace(" ", separator) if x and x.lower()!='nan' else "")
+        # 移除重複的分隔符號 (例如原本是空白，替換後變雙空白)
+        if separator != "\n":
+             df_export[col] = df_export[col].apply(lambda x: re.sub(f"[{separator}]+", separator, x))
+
+    with pd.ExcelWriter(output, engine='openpyxl') as w:
+        df_export.to_excel(w, index=False)
+        ws = w.sheets['Sheet1']
+        
+        # 設定樣式：強制文字格式 + 自動換行
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.number_format = '@'  # 強制設為文字格式
+                if separator == "\n":
+                    cell.alignment = Alignment(wrap_text=True, vertical='center')
+                else:
+                    cell.alignment = Alignment(wrap_text=False, vertical='center')
+                    
+    return output.getvalue()
 
 # ==========================================
 # 分頁 1: 排班修改工具
@@ -263,7 +235,6 @@ with tab1:
 
                 st.markdown("---")
                 st.subheader("2. 依照完診分析自動更新")
-                st.caption(f"📍 目前設定：分隔符號=[{sep_option}]，連接符號=[{conn_option}] (可於側邊欄修改)")
                 analysis_file = st.file_uploader("請上傳完診結果檔", type=['xlsx', 'xls', 'csv'], key="tab1_analysis")
 
                 if analysis_file:
@@ -337,23 +308,24 @@ with tab1:
                                                     default_execute = False
                                                 
                                                 parts = []
-                                                if has_m and fm: parts.append(format_time_range("08:00", fm, selected_conn))
+                                                # 這裡先用換行符號暫存，下載時再依按鈕決定
+                                                if has_m and fm: parts.append(format_time_range("08:00", fm, "-"))
                                                 if is_licheng:
-                                                    if has_a and fa: parts.append(format_time_range("14:00", fa, selected_conn))
-                                                    if has_e and fe: parts.append(format_time_range("18:30", fe, selected_conn))
+                                                    if has_a and fa: parts.append(format_time_range("14:00", fa, "-"))
+                                                    if has_e and fe: parts.append(format_time_range("18:30", fe, "-"))
                                                 else:
                                                     if has_m and has_a and not has_e:
-                                                        if fa: parts.append(format_time_range("15:00", fa, selected_conn))
+                                                        if fa: parts.append(format_time_range("15:00", fa, "-"))
                                                     elif not has_m and has_a and has_e:
-                                                        if fa: parts.insert(0 if not parts else len(parts), format_time_range("15:00", fa, selected_conn))
+                                                        if fa: parts.insert(0 if not parts else len(parts), format_time_range("15:00", fa, "-"))
                                                     elif has_m and has_a and has_e:
                                                         pass 
                                                     elif not has_m and has_a and not has_e:
-                                                        if fa: parts.append(format_time_range("15:00", fa, selected_conn))
+                                                        if fa: parts.append(format_time_range("15:00", fa, "-"))
                                                     elif not has_m and not has_a and has_e:
-                                                        if fe: parts.append(format_time_range("18:30", fe, selected_conn))
+                                                        if fe: parts.append(format_time_range("18:30", fe, "-"))
                                                 
-                                                final_val = selected_sep.join(parts)
+                                                final_val = "\n".join(parts)
                                                 
                                                 if final_val and final_val != cell_val:
                                                     changes_list.append({
@@ -387,31 +359,32 @@ with tab1:
                     except Exception as e: st.error(f"錯誤: {e}")
 
             st.markdown("---")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                o = io.BytesIO()
-                with pd.ExcelWriter(o, engine='openpyxl') as w: 
-                    st.session_state.working_df.to_excel(w, index=False)
-                    ws = w.sheets['Sheet1']
-                    if selected_sep == "\n":
-                        for row in ws.iter_rows():
-                            for cell in row:
-                                cell.alignment = Alignment(wrap_text=True)
-                st.download_button("📥 下載 Excel (格式修正版)", o.getvalue(), '排班表_匯入用.xlsx')
+            st.subheader("📥 選擇下載格式 (請依序測試)")
             
-            with c2:
-                try:
-                    csv_export = st.session_state.working_df.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
-                    st.download_button("📥 下載 Big5 CSV (系統專用)", csv_export, '排班表_Big5.csv', 'text/csv')
-                except: pass
-            with c3:
-                u = st.session_state.working_df.to_csv(index=False, encoding='utf-8-sig')
-                st.download_button("📥 下載 UTF-8 CSV", u, '排班表_UTF8.csv', 'text/csv')
+            # 準備 DataFrame (確保最新)
+            df_to_export = st.session_state.working_df
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                # 格式 A: 換行分隔 (最常見)
+                data_a = generate_excel_bytes(df_to_export, separator="\n", connector="-")
+                st.download_button("1. 下載格式 A (換行) - 推薦", data_a, '排班表_換行分隔.xlsx', type="primary")
+            
+            with col2:
+                # 格式 B: 空白分隔
+                data_b = generate_excel_bytes(df_to_export, separator=" ", connector="-")
+                st.download_button("2. 下載格式 B (空白)", data_b, '排班表_空白分隔.xlsx')
+                
+            with col3:
+                # 格式 C: 逗號分隔 (特殊系統)
+                data_c = generate_excel_bytes(df_to_export, separator=",", connector="-")
+                st.download_button("3. 下載格式 C (逗號)", data_c, '排班表_逗號分隔.xlsx')
 
         except Exception as e: st.error(f"發生錯誤: {e}")
 
 # ==========================================
-# 分頁 2: 完診分析 (含延診偵測) - 完整版
+# 分頁 2: 完診分析 (含延診偵測)
 # ==========================================
 with tab2:
     st.header("批次完診分析 & 異常偵測")
