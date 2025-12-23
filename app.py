@@ -3,21 +3,37 @@ import pandas as pd
 from datetime import datetime, timedelta
 import io
 import re
-from openpyxl.styles import Alignment, Font 
+from openpyxl.styles import Alignment 
 import csv
 
 # ==========================================
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (多格式輸出版)")
+st.title("🏥 診所行政綜合工具箱 (最終定案版)")
 
 # ==========================================
-# 側邊欄
+# 側邊欄：格式設定 (已預設為逗號)
 # ==========================================
 with st.sidebar:
-    st.header("🔧 系統功能")
-    st.info("若匯入後顯示 08:00-08:00，請使用頁面底部的「格式 A (換行)」或「格式 C (逗號)」進行測試。")
+    st.header("⚙️ 匯出格式設定")
+    st.info("已預設為系統可讀取的「逗號分隔」格式。")
+    
+    # 1. 設定多時段中間用什麼隔開 (預設改為逗號)
+    sep_options = ["逗號 (,)", "換行 (Alt+Enter)", "空白 (Space)", "分號 (;)"]
+    sep_option = st.selectbox("1. 多時段「分隔」符號", sep_options, index=0)
+    
+    # 2. 設定時間中間用什麼連接
+    conn_options = ["減號 (-)", "波浪號 (~)", "無符號 (08001200)"]
+    conn_option = st.selectbox("2. 時間「連接」符號", conn_options, index=0)
+
+    # 對應符號邏輯
+    sep_map = {"空白 (Space)": " ", "換行 (Alt+Enter)": "\n", "逗號 (,)": ",", "分號 (;)": ";"}
+    conn_map = {"減號 (-)": "-", "波浪號 (~)": "~", "無符號 (08001200)": ""}
+    
+    selected_sep = sep_map[sep_option]
+    selected_conn = conn_map[conn_option]
+
     if st.button("🔄 清除所有快取與狀態"):
         st.session_state.clear()
         st.rerun()
@@ -116,24 +132,18 @@ def format_time_range(start_str, end_str, connector="-"):
         return f"{start_str.replace(':','')}{end_str.replace(':','')}"
     return f"{start_str}{connector}{end_str}"
 
-# 專門產生 Excel 的函式 (支援多種分隔符號)
+# 專門產生 Excel 的函式
 def generate_excel_bytes(df, separator, connector="-"):
     output = io.BytesIO()
-    
-    # 建立一個暫存的 DataFrame 進行字串組合
     df_export = df.copy()
     
-    # 找出所有日期欄位
+    # 找出所有日期欄位並替換分隔符號
     date_cols = [c for c in df_export.columns if re.match(r'\d{4}-\d{2}-\d{2}', str(c))]
     
-    # 針對每個日期欄位，重新組合字串 (因為 session_state 裡可能已經是舊格式)
-    # 我們需要從「原始內容」重新解析，或假設 session_state 裡的內容是乾淨的
-    # 這裡簡單處理：假設 df 裡的內容已經是處理過的字串，我們只需替換分隔符號
-    # 但為了保險，我們針對特定字符做替換
-    
     for col in date_cols:
+        # 先將 \n 和 空白 都轉成目標分隔符號 (逗號)
         df_export[col] = df_export[col].astype(str).apply(lambda x: x.replace("\n", separator).replace(" ", separator) if x and x.lower()!='nan' else "")
-        # 移除重複的分隔符號 (例如原本是空白，替換後變雙空白)
+        # 移除重複的分隔符號
         if separator != "\n":
              df_export[col] = df_export[col].apply(lambda x: re.sub(f"[{separator}]+", separator, x))
 
@@ -141,14 +151,11 @@ def generate_excel_bytes(df, separator, connector="-"):
         df_export.to_excel(w, index=False)
         ws = w.sheets['Sheet1']
         
-        # 設定樣式：強制文字格式 + 自動換行
+        # 設定樣式：強制文字格式 + 垂直置中
         for row in ws.iter_rows():
             for cell in row:
-                cell.number_format = '@'  # 強制設為文字格式
-                if separator == "\n":
-                    cell.alignment = Alignment(wrap_text=True, vertical='center')
-                else:
-                    cell.alignment = Alignment(wrap_text=False, vertical='center')
+                cell.number_format = '@'
+                cell.alignment = Alignment(wrap_text=(separator=="\n"), vertical='center')
                     
     return output.getvalue()
 
@@ -308,24 +315,25 @@ with tab1:
                                                     default_execute = False
                                                 
                                                 parts = []
-                                                # 這裡先用換行符號暫存，下載時再依按鈕決定
-                                                if has_m and fm: parts.append(format_time_range("08:00", fm, "-"))
+                                                # 使用設定的連接符號
+                                                if has_m and fm: parts.append(format_time_range("08:00", fm, selected_conn))
                                                 if is_licheng:
-                                                    if has_a and fa: parts.append(format_time_range("14:00", fa, "-"))
-                                                    if has_e and fe: parts.append(format_time_range("18:30", fe, "-"))
+                                                    if has_a and fa: parts.append(format_time_range("14:00", fa, selected_conn))
+                                                    if has_e and fe: parts.append(format_time_range("18:30", fe, selected_conn))
                                                 else:
                                                     if has_m and has_a and not has_e:
-                                                        if fa: parts.append(format_time_range("15:00", fa, "-"))
+                                                        if fa: parts.append(format_time_range("15:00", fa, selected_conn))
                                                     elif not has_m and has_a and has_e:
-                                                        if fa: parts.insert(0 if not parts else len(parts), format_time_range("15:00", fa, "-"))
+                                                        if fa: parts.insert(0 if not parts else len(parts), format_time_range("15:00", fa, selected_conn))
                                                     elif has_m and has_a and has_e:
                                                         pass 
                                                     elif not has_m and has_a and not has_e:
-                                                        if fa: parts.append(format_time_range("15:00", fa, "-"))
+                                                        if fa: parts.append(format_time_range("15:00", fa, selected_conn))
                                                     elif not has_m and not has_a and has_e:
-                                                        if fe: parts.append(format_time_range("18:30", fe, "-"))
+                                                        if fe: parts.append(format_time_range("18:30", fe, selected_conn))
                                                 
-                                                final_val = "\n".join(parts)
+                                                # 暫存為 selected_sep，下載時 generate_excel_bytes 會再確保一次
+                                                final_val = selected_sep.join(parts)
                                                 
                                                 if final_val and final_val != cell_val:
                                                     changes_list.append({
@@ -359,27 +367,22 @@ with tab1:
                     except Exception as e: st.error(f"錯誤: {e}")
 
             st.markdown("---")
-            st.subheader("📥 選擇下載格式 (請依序測試)")
             
-            # 準備 DataFrame (確保最新)
-            df_to_export = st.session_state.working_df
+            # 使用目前的設定產生檔案
+            data_export = generate_excel_bytes(st.session_state.working_df, separator=selected_sep, connector=selected_conn)
             
-            col1, col2, col3 = st.columns(3)
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.download_button(f"📥 下載 Excel ({sep_option})", data_export, '排班表_匯入用.xlsx', type="primary")
             
-            with col1:
-                # 格式 A: 換行分隔 (最常見)
-                data_a = generate_excel_bytes(df_to_export, separator="\n", connector="-")
-                st.download_button("1. 下載格式 A (換行) - 推薦", data_a, '排班表_換行分隔.xlsx', type="primary")
-            
-            with col2:
-                # 格式 B: 空白分隔
-                data_b = generate_excel_bytes(df_to_export, separator=" ", connector="-")
-                st.download_button("2. 下載格式 B (空白)", data_b, '排班表_空白分隔.xlsx')
-                
-            with col3:
-                # 格式 C: 逗號分隔 (特殊系統)
-                data_c = generate_excel_bytes(df_to_export, separator=",", connector="-")
-                st.download_button("3. 下載格式 C (逗號)", data_c, '排班表_逗號分隔.xlsx')
+            with c2:
+                try:
+                    csv_export = st.session_state.working_df.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
+                    st.download_button("📥 下載 Big5 CSV", csv_export, '排班表_Big5.csv', 'text/csv')
+                except: pass
+            with c3:
+                u = st.session_state.working_df.to_csv(index=False, encoding='utf-8-sig')
+                st.download_button("📥 下載 UTF-8 CSV", u, '排班表_UTF8.csv', 'text/csv')
 
         except Exception as e: st.error(f"發生錯誤: {e}")
 
