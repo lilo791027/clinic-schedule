@@ -10,30 +10,11 @@ import csv
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (最終定案版)")
+st.title("🏥 診所行政綜合工具箱 (系統格式相容版)")
 
-# ==========================================
-# 側邊欄：格式設定 (已預設為逗號)
-# ==========================================
+# 側邊欄
 with st.sidebar:
-    st.header("⚙️ 匯出格式設定")
-    st.info("已預設為系統可讀取的「逗號分隔」格式。")
-    
-    # 1. 設定多時段中間用什麼隔開 (預設改為逗號)
-    sep_options = ["逗號 (,)", "換行 (Alt+Enter)", "空白 (Space)", "分號 (;)"]
-    sep_option = st.selectbox("1. 多時段「分隔」符號", sep_options, index=0)
-    
-    # 2. 設定時間中間用什麼連接
-    conn_options = ["減號 (-)", "波浪號 (~)", "無符號 (08001200)"]
-    conn_option = st.selectbox("2. 時間「連接」符號", conn_options, index=0)
-
-    # 對應符號邏輯
-    sep_map = {"空白 (Space)": " ", "換行 (Alt+Enter)": "\n", "逗號 (,)": ",", "分號 (;)": ";"}
-    conn_map = {"減號 (-)": "-", "波浪號 (~)": "~", "無符號 (08001200)": ""}
-    
-    selected_sep = sep_map[sep_option]
-    selected_conn = conn_map[conn_option]
-
+    st.info("💡 此版本已針對您的系統優化：強制使用「換行分隔」與「雙引號包裹」。")
     if st.button("🔄 清除所有快取與狀態"):
         st.session_state.clear()
         st.rerun()
@@ -128,34 +109,33 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
     return new_t.strftime("%H:%M")
 
 def format_time_range(start_str, end_str, connector="-"):
-    if connector == "": 
-        return f"{start_str.replace(':','')}{end_str.replace(':','')}"
     return f"{start_str}{connector}{end_str}"
 
-# 專門產生 Excel 的函式
-def generate_excel_bytes(df, separator, connector="-"):
+# 專門產生 Excel 的函式 (強制換行)
+def generate_excel_bytes(df):
     output = io.BytesIO()
     df_export = df.copy()
     
-    # 找出所有日期欄位並替換分隔符號
+    # 針對日期欄位，確保內容是乾淨的 \n 分隔
     date_cols = [c for c in df_export.columns if re.match(r'\d{4}-\d{2}-\d{2}', str(c))]
     
     for col in date_cols:
-        # 先將 \n 和 空白 都轉成目標分隔符號 (逗號)
-        df_export[col] = df_export[col].astype(str).apply(lambda x: x.replace("\n", separator).replace(" ", separator) if x and x.lower()!='nan' else "")
-        # 移除重複的分隔符號
-        if separator != "\n":
-             df_export[col] = df_export[col].apply(lambda x: re.sub(f"[{separator}]+", separator, x))
+        # 強制轉換成換行符號
+        df_export[col] = df_export[col].astype(str).apply(
+            lambda x: x.replace(" ", "\n").replace(",", "\n") if x and x.lower()!='nan' else ""
+        )
+        # 移除多餘的重複換行
+        df_export[col] = df_export[col].apply(lambda x: re.sub(r'\n+', '\n', x).strip())
 
     with pd.ExcelWriter(output, engine='openpyxl') as w:
         df_export.to_excel(w, index=False)
         ws = w.sheets['Sheet1']
         
-        # 設定樣式：強制文字格式 + 垂直置中
+        # 設定樣式：強制文字格式 + 自動換行
         for row in ws.iter_rows():
             for cell in row:
                 cell.number_format = '@'
-                cell.alignment = Alignment(wrap_text=(separator=="\n"), vertical='center')
+                cell.alignment = Alignment(wrap_text=True, vertical='center')
                     
     return output.getvalue()
 
@@ -242,6 +222,7 @@ with tab1:
 
                 st.markdown("---")
                 st.subheader("2. 依照完診分析自動更新")
+                st.caption("📍 此版本將強制使用「換行 (\n)」來分隔多個時段，確保系統正確讀取。")
                 analysis_file = st.file_uploader("請上傳完診結果檔", type=['xlsx', 'xls', 'csv'], key="tab1_analysis")
 
                 if analysis_file:
@@ -315,25 +296,25 @@ with tab1:
                                                     default_execute = False
                                                 
                                                 parts = []
-                                                # 使用設定的連接符號
-                                                if has_m and fm: parts.append(format_time_range("08:00", fm, selected_conn))
+                                                # 強制使用減號連接
+                                                if has_m and fm: parts.append(format_time_range("08:00", fm, "-"))
                                                 if is_licheng:
-                                                    if has_a and fa: parts.append(format_time_range("14:00", fa, selected_conn))
-                                                    if has_e and fe: parts.append(format_time_range("18:30", fe, selected_conn))
+                                                    if has_a and fa: parts.append(format_time_range("14:00", fa, "-"))
+                                                    if has_e and fe: parts.append(format_time_range("18:30", fe, "-"))
                                                 else:
                                                     if has_m and has_a and not has_e:
-                                                        if fa: parts.append(format_time_range("15:00", fa, selected_conn))
+                                                        if fa: parts.append(format_time_range("15:00", fa, "-"))
                                                     elif not has_m and has_a and has_e:
-                                                        if fa: parts.insert(0 if not parts else len(parts), format_time_range("15:00", fa, selected_conn))
+                                                        if fa: parts.insert(0 if not parts else len(parts), format_time_range("15:00", fa, "-"))
                                                     elif has_m and has_a and has_e:
                                                         pass 
                                                     elif not has_m and has_a and not has_e:
-                                                        if fa: parts.append(format_time_range("15:00", fa, selected_conn))
+                                                        if fa: parts.append(format_time_range("15:00", fa, "-"))
                                                     elif not has_m and not has_a and has_e:
-                                                        if fe: parts.append(format_time_range("18:30", fe, selected_conn))
+                                                        if fe: parts.append(format_time_range("18:30", fe, "-"))
                                                 
-                                                # 暫存為 selected_sep，下載時 generate_excel_bytes 會再確保一次
-                                                final_val = selected_sep.join(parts)
+                                                # 內部處理統一用 \n
+                                                final_val = "\n".join(parts)
                                                 
                                                 if final_val and final_val != cell_val:
                                                     changes_list.append({
@@ -369,16 +350,17 @@ with tab1:
             st.markdown("---")
             
             # 使用目前的設定產生檔案
-            data_export = generate_excel_bytes(st.session_state.working_df, separator=selected_sep, connector=selected_conn)
+            data_export = generate_excel_bytes(st.session_state.working_df)
             
             c1, c2, c3 = st.columns(3)
             with c1:
-                st.download_button(f"📥 下載 Excel ({sep_option})", data_export, '排班表_匯入用.xlsx', type="primary")
+                st.download_button(f"📥 下載 Excel (系統相容版)", data_export, '排班表_匯入用.xlsx', type="primary")
             
             with c2:
                 try:
+                    # CSV 關鍵修正：quote_all=True
                     csv_export = st.session_state.working_df.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
-                    st.download_button("📥 下載 Big5 CSV", csv_export, '排班表_Big5.csv', 'text/csv')
+                    st.download_button("📥 下載 Big5 CSV (QUOTE_ALL)", csv_export, '排班表_Big5.csv', 'text/csv')
                 except: pass
             with c3:
                 u = st.session_state.working_df.to_csv(index=False, encoding='utf-8-sig')
