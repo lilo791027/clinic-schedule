@@ -3,20 +3,20 @@ import pandas as pd
 from datetime import datetime, timedelta
 import io
 import re
-from openpyxl.styles import Alignment 
+from openpyxl.styles import Alignment, PatternFill
 import csv
 
 # ==========================================
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政綜合工具箱 (完整版：含格式偵探)")
+st.title("🏥 診所行政綜合工具箱 (完整版)")
 
 # ==========================================
 # 側邊欄：格式偵探 & 設定
 # ==========================================
 with st.sidebar:
-    st.header("🕵️ 格式偵探 (Format Detective)")
+    st.header("🕵️ 格式偵探 (Tab 1 專用)")
     st.info("如果不確定系統要什麼格式，請在此上傳「系統原本匯出且正常的檔案」，我幫您分析！")
     
     detect_file = st.file_uploader("上傳正常的排班表 (偵測用)", type=['csv', 'xlsx', 'xls'], key="detect_uploader")
@@ -26,7 +26,6 @@ with st.sidebar:
     
     if detect_file is not None:
         try:
-            # 讀取檔案以進行分析
             detect_file.seek(0)
             if detect_file.name.lower().endswith('.csv'):
                 try: df_d = pd.read_csv(detect_file, encoding='cp950', dtype=str)
@@ -36,12 +35,10 @@ with st.sidebar:
             else:
                 df_d = pd.read_excel(detect_file, dtype=str)
             
-            # 尋找包含時間的格子進行分析
             found_sample = False
             for col in df_d.columns:
                 for val in df_d[col].dropna():
                     val_str = str(val)
-                    # 尋找看起來像時間的 (例如長度大於 10 且包含數字)
                     if len(val_str) > 10 and any(char.isdigit() for char in val_str):
                         if "\n" in val_str:
                             detected_sep = "換行 (Alt+Enter)"
@@ -71,25 +68,14 @@ with st.sidebar:
     st.markdown("---")
     st.header("⚙️ 匯出格式設定")
     
-    # 1. 設定多時段中間用什麼隔開
     sep_options = ["空白 (Space)", "換行 (Alt+Enter)", "逗號 (,)", "分號 (;)"]
     sep_index = sep_options.index(detected_sep) if detected_sep in sep_options else 0
-    sep_option = st.selectbox(
-        "1. 多時段「分隔」符號", 
-        sep_options,
-        index=sep_index
-    )
+    sep_option = st.selectbox("1. 多時段「分隔」符號", sep_options, index=sep_index)
     
-    # 2. 設定時間中間用什麼連接
     conn_options = ["減號 (-)", "波浪號 (~)", "無符號 (08001200)"]
     conn_index = conn_options.index(detected_conn) if detected_conn in conn_options else 0
-    conn_option = st.selectbox(
-        "2. 時間「連接」符號", 
-        conn_options,
-        index=conn_index
-    )
+    conn_option = st.selectbox("2. 時間「連接」符號", conn_options, index=conn_index)
 
-    # 對應符號邏輯
     sep_map = {"空白 (Space)": " ", "換行 (Alt+Enter)": "\n", "逗號 (,)": ",", "分號 (;)": ";"}
     conn_map = {"減號 (-)": "-", "波浪號 (~)": "~", "無符號 (08001200)": ""}
     
@@ -124,8 +110,7 @@ def parse_time_obj(raw_time_str):
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None
     try:
         t_str = str(raw_time_str).strip()
-        t_str = t_str.replace("~", "-") # 統一處理
-        
+        t_str = t_str.replace("~", "-")
         if isinstance(raw_time_str, (datetime, pd.Timestamp)):
             t = raw_time_str
         else:
@@ -191,8 +176,7 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
     return new_t.strftime("%H:%M")
 
 def format_time_range(start_str, end_str, connector):
-    """根據使用者設定組合時間字串"""
-    if connector == "": # 無符號模式 (08001200)
+    if connector == "": 
         return f"{start_str.replace(':','')}{end_str.replace(':','')}"
     return f"{start_str}{connector}{end_str}"
 
@@ -353,7 +337,6 @@ with tab1:
                                                     default_execute = False
                                                 
                                                 parts = []
-                                                # 使用側邊欄設定的連接符號
                                                 if has_m and fm: parts.append(format_time_range("08:00", fm, selected_conn))
                                                 if is_licheng:
                                                     if has_a and fa: parts.append(format_time_range("14:00", fa, selected_conn))
@@ -370,7 +353,6 @@ with tab1:
                                                     elif not has_m and not has_a and has_e:
                                                         if fe: parts.append(format_time_range("18:30", fe, selected_conn))
                                                 
-                                                # 使用側邊欄設定的分隔符號
                                                 final_val = selected_sep.join(parts)
                                                 
                                                 if final_val and final_val != cell_val:
@@ -419,7 +401,6 @@ with tab1:
             
             with c2:
                 try:
-                    # 修正：針對 CSV 匯出的特殊處理 (支援換行與雙引號)
                     csv_export = st.session_state.working_df.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
                     st.download_button("📥 下載 Big5 CSV (系統專用)", csv_export, '排班表_Big5.csv', 'text/csv')
                 except: pass
@@ -430,9 +411,189 @@ with tab1:
         except Exception as e: st.error(f"發生錯誤: {e}")
 
 # ==========================================
-# 分頁 2: 完診分析 (含延診偵測)
+# 分頁 2: 完診分析 (含延診偵測) - 完整版
 # ==========================================
-# (分頁 2 程式碼與前次相同，為節省空間略過，請保留您原本的分頁 2 程式碼)
 with tab2:
-    st.info("請切換至「排班修改工具」進行格式設定")
-    # ... (貼上您原本運作正常的 Tab 2 程式碼) ...
+    st.header("批次完診分析 & 異常偵測")
+    fs = st.radio("請選擇檔案類型：", ("🏥 原始系統匯出檔 (標題在第4列)", "📄 標準/分析結果檔 (標題在第1列)"), horizontal=True)
+    default_hr = 4 if "第4列" in fs else 1
+    upl = st.file_uploader("上傳完診明細 (可多檔)", type=['xlsx','xls','csv'], accept_multiple_files=True, key="t2")
+    hr_idx = st.number_input("資料標題在第幾列？", min_value=1, value=default_hr) - 1
+    
+    if upl:
+        st.subheader("📋 檔案預覽")
+        try:
+            f1 = upl[0]; f1.seek(0)
+            if f1.name.lower().endswith('.csv'): 
+                try: df_s = pd.read_csv(f1, header=hr_idx, encoding='cp950', nrows=5)
+                except: 
+                    f1.seek(0)
+                    df_s = pd.read_csv(f1, header=hr_idx, encoding='utf-8', nrows=5)
+            else: df_s = pd.read_excel(f1, header=hr_idx, nrows=5)
+            
+            df_s.columns = df_s.columns.astype(str).str.strip()
+            st.dataframe(df_s.head(3))
+            
+            cols = df_s.columns.tolist()
+            c1, c2, c3 = st.columns(3)
+            idx_d = next((i for i, x in enumerate(cols) if "日期" in x), 0)
+            idx_s = next((i for i, x in enumerate(cols) if any(k in x for k in ["午", "班", "時"])), 1 if len(cols)>1 else 0)
+            idx_t = next((i for i, x in enumerate(cols) if any(k in x for k in ["時間", "完診"])), len(cols)-1)
+
+            with c1: d_c = st.selectbox("請確認「日期」欄位", cols, index=idx_d)
+            with c2: s_c = st.selectbox("請確認「時段別」欄位", cols, index=idx_s)
+            with c3: t_c = st.selectbox("請確認「時間」欄位", cols, index=idx_t)
+
+            if st.button("🚀 開始分析並偵測延診", key="an_btn"):
+                res = []
+                bar = st.progress(0)
+                error_log = []
+
+                for i, f in enumerate(upl):
+                    try:
+                        f.seek(0)
+                        if f.name.lower().endswith('.csv'): 
+                            try: h = pd.read_csv(f, header=None, nrows=1, encoding='cp950')
+                            except: 
+                                f.seek(0); h = pd.read_csv(f, header=None, nrows=1, encoding='utf-8')
+                        else: h = pd.read_excel(f, header=None, nrows=1)
+                        c_name = str(h.iloc[0,0]).strip()[:4]
+
+                        f.seek(0)
+                        if f.name.lower().endswith('.csv'): 
+                            try: d = pd.read_csv(f, header=hr_idx, encoding='cp950')
+                            except: 
+                                f.seek(0); d = pd.read_csv(f, header=hr_idx, encoding='utf-8')
+                        else: d = pd.read_excel(f, header=hr_idx)
+                        d.columns = d.columns.astype(str).str.strip()
+
+                        if all(x in d.columns for x in [d_c, s_c, t_c]):
+                            clean = d.dropna(subset=[d_c]).copy()
+                            clean[t_c] = clean[t_c].astype(str)
+                            g = clean.groupby([d_c, s_c])[t_c].max().reset_index()
+                            p = g.pivot(index=d_c, columns=s_c, values=t_c).reset_index()
+                            p.insert(0, '診所名稱', c_name)
+                            p[d_c] = p[d_c].apply(smart_date_parser)
+                            res.append(p)
+                    except Exception as e: error_log.append(f"{f.name}: {e}")
+                    bar.progress((i+1)/len(upl))
+                
+                if res:
+                    final = pd.concat(res, ignore_index=True)
+                    base = ['診所名稱', d_c]
+                    shifts = [c for c in final.columns if c not in base]
+                    def sk(n): return 0 if "早" in n else 1 if "午" in n else 2 if "晚" in n else 99
+                    shifts.sort(key=sk)
+                    final = final[base + shifts].fillna("")
+                    final = final.sort_values(by=d_c)
+                    
+                    export_rows = []
+                    delayed_records = []
+                    col_m = next((c for c in shifts if "早" in c), None)
+                    col_a = next((c for c in shifts if "午" in c), None)
+                    col_e = next((c for c in shifts if "晚" in c), None)
+                    
+                    for idx, row in final.iterrows():
+                        clinic = row['診所名稱']
+                        date_val = row[d_c]
+                        raw_m = str(row[col_m]).strip() if col_m and pd.notna(row[col_m]) else ""
+                        raw_a = str(row[col_a]).strip() if col_a and pd.notna(row[col_a]) else ""
+                        raw_e = str(row[col_e]).strip() if col_e and pd.notna(row[col_e]) else ""
+                        
+                        fix_m, fix_a, fix_e = "", "", ""
+
+                        if raw_m and raw_m.lower()!='nan':
+                            t = parse_time_obj(raw_m)
+                            if t:
+                                is_d, lim = check_is_delayed(t, "早", clinic)
+                                if is_d: delayed_records.append({"日期": date_val, "診所": clinic, "班別": "早", "標準時間": lim, "實際完診": t.strftime("%H:%M"), "狀態": "⚠️ 延診"})
+                                fix_m = calculate_time_rule(raw_m, "早", clinic) or raw_m
+                        
+                        if raw_a and raw_a.lower()!='nan':
+                            t = parse_time_obj(raw_a)
+                            if t:
+                                is_d, lim = check_is_delayed(t, "午", clinic)
+                                if is_d: delayed_records.append({"日期": date_val, "診所": clinic, "班別": "午", "標準時間": lim, "實際完診": t.strftime("%H:%M"), "狀態": "⚠️ 延診"})
+                                fix_a = calculate_time_rule(raw_a, "午", clinic) or raw_a
+
+                        if raw_e and raw_e.lower()!='nan':
+                            t = parse_time_obj(raw_e)
+                            if t:
+                                is_d, lim = check_is_delayed(t, "晚", clinic)
+                                if is_d: delayed_records.append({"日期": date_val, "診所": clinic, "班別": "晚", "標準時間": lim, "實際完診": t.strftime("%H:%M"), "狀態": "⚠️ 延診"})
+                                fix_e = calculate_time_rule(raw_e, "晚", clinic) or raw_e
+
+                        export_rows.append({
+                            "診所名稱": clinic,
+                            "日期": date_val,
+                            "早上(原始)": raw_m if raw_m and raw_m.lower()!='nan' else "",
+                            "早上": fix_m,
+                            "下午(原始)": raw_a if raw_a and raw_a.lower()!='nan' else "",
+                            "下午": fix_a,
+                            "晚上(原始)": raw_e if raw_e and raw_e.lower()!='nan' else "",
+                            "晚上": fix_e
+                        })
+
+                    df_export = pd.DataFrame(export_rows)
+                    cols_order = ["診所名稱", "日期", "早上(原始)", "早上", "下午(原始)", "下午", "晚上(原始)", "晚上"]
+                    df_export = df_export[cols_order]
+
+                    st.success(f"分析完成！共處理 {len(res)} 個檔案。")
+                    st.markdown("---")
+                    st.subheader("🚨 延診異常偵測報告")
+                    if delayed_records:
+                        df_delay = pd.DataFrame(delayed_records)
+                        df_delay = df_delay.sort_values(by="日期")
+                        st.error(f"注意！偵測到 {len(df_delay)} 筆延診紀錄：")
+                        st.dataframe(df_delay, use_container_width=True)
+                    else:
+                        st.success("🎉 太棒了！本批資料完全沒有延診紀錄。")
+                    
+                    st.markdown("---")
+                    
+                    def highlight_delay_rows(row):
+                        styles = ['' for _ in row.index]
+                        clinic = str(row['診所名稱'])
+                        
+                        def apply_yellow(val_str, shift_type):
+                            if val_str:
+                                t = parse_time_obj(val_str)
+                                is_d, _ = check_is_delayed(t, shift_type, clinic)
+                                if is_d: return 'background-color: #FFFF00' 
+                            return ''
+
+                        if '早上(原始)' in row.index and '早上' in row.index:
+                            s = apply_yellow(row['早上(原始)'], '早')
+                            if s:
+                                styles[row.index.get_loc('早上(原始)')] = s
+                                styles[row.index.get_loc('早上')] = s
+
+                        if '下午(原始)' in row.index and '下午' in row.index:
+                            s = apply_yellow(row['下午(原始)'], '午')
+                            if s:
+                                styles[row.index.get_loc('下午(原始)')] = s
+                                styles[row.index.get_loc('下午')] = s
+
+                        if '晚上(原始)' in row.index and '晚上' in row.index:
+                            s = apply_yellow(row['晚上(原始)'], '晚')
+                            if s:
+                                styles[row.index.get_loc('晚上(原始)')] = s
+                                styles[row.index.get_loc('晚上')] = s
+                        
+                        return styles
+
+                    st.subheader("📥 下載分析結果")
+                    o = io.BytesIO()
+                    with pd.ExcelWriter(o, engine='openpyxl') as w: 
+                        df_export.style.apply(highlight_delay_rows, axis=1).to_excel(w, index=False)
+                    
+                    st.download_button(
+                        label="📥 下載完整分析報表 (.xlsx)",
+                        data=o.getvalue(),
+                        file_name='完診分析報表_含延診標記.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        type="primary"
+                    )
+
+        except Exception as e: 
+            st.error(f"發生錯誤: {e}")
