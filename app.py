@@ -13,13 +13,13 @@ st.set_page_config(page_title="診所行政綜合工具", layout="wide", page_ic
 st.title("🏥 診所行政綜合工具箱 (最終定案版)")
 
 # ==========================================
-# 側邊欄：格式設定
+# 側邊欄：格式設定 (已預設為逗號)
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 匯出格式設定")
     st.info("已預設為系統可讀取的「逗號分隔」格式。")
     
-    # 1. 設定多時段中間用什麼隔開
+    # 1. 設定多時段中間用什麼隔開 (預設改為逗號)
     sep_options = ["逗號 (,)", "換行 (Alt+Enter)", "空白 (Space)", "分號 (;)"]
     sep_option = st.selectbox("1. 多時段「分隔」符號", sep_options, index=0)
     
@@ -141,7 +141,7 @@ def generate_excel_bytes(df, separator, connector="-"):
     date_cols = [c for c in df_export.columns if re.match(r'\d{4}-\d{2}-\d{2}', str(c))]
     
     for col in date_cols:
-        # 先將 \n 和 空白 都轉成目標分隔符號
+        # 先將 \n 和 空白 都轉成目標分隔符號 (逗號)
         df_export[col] = df_export[col].astype(str).apply(lambda x: x.replace("\n", separator).replace(" ", separator) if x and x.lower()!='nan' else "")
         # 移除重複的分隔符號
         if separator != "\n":
@@ -280,47 +280,21 @@ with tab1:
                                             is_doctor_cell = "醫師" in cell_val or is_doctor_row
                                             
                                             if cell_val and cell_val.lower()!='nan':
-                                                # 使用更廣泛的分割符
                                                 shifts = re.split(r'[,\n\s]', cell_val)
-                                                
-                                                # === 修正邏輯開始：保留診所名稱 & 排除 00:00 ===
                                                 has_m, has_a, has_e = False, False, False
-                                                kept_tags = [] # 儲存非時間的標籤 (如: 立順, 上京)
-                                                
                                                 for s in shifts:
-                                                    s = s.strip()
                                                     if not s: continue
-                                                    
-                                                    # 1. 排除無效時間
-                                                    if "00:00" in s: continue
-                                                    
-                                                    # 2. 判斷是否為「非時間」且「非關鍵字」的純文字
-                                                    has_digit = any(char.isdigit() for char in s)
-                                                    is_keyword = any(k in s for k in ["早", "午", "晚", "全"])
-                                                    
-                                                    if not has_digit and not is_keyword:
-                                                        kept_tags.append(s)
-                                                        continue
-
-                                                    # 3. 既有的判斷邏輯
                                                     if "全" in s: has_m=has_a=has_e=True
                                                     if "早" in s: has_m=True
                                                     if "午" in s: has_a=True
                                                     if "晚" in s: has_e=True
-                                                    
-                                                    # 4. 純時間數字解析
-                                                    if not is_keyword and has_digit:
+                                                    if not any(x in s for x in ["早","午","晚","全"]):
                                                         try:
-                                                            # 簡單清理只留數字跟冒號
-                                                            clean_time = re.sub(r'[^\d:]', '', s.split('-')[0])
-                                                            if ':' in clean_time:
-                                                                th = int(clean_time.split(':')[0])
-                                                                if th < 13: has_m=True
-                                                                elif 13<=th<18: has_a=True
-                                                                elif th>=18: has_e=True
+                                                            th = int(s.split(':')[0]) if ':' in s else int(s.split('-')[0].split(':')[0])
+                                                            if th < 13: has_m=True
+                                                            elif 13<=th<18: has_a=True
+                                                            elif th>=18: has_e=True
                                                         except: pass
-                                                
-                                                # === 修正邏輯結束 ===
                                                 
                                                 vals = time_map[col]
                                                 fm = calculate_time_rule(vals['早'], "早", selected_clinic, is_special) if has_m else None
@@ -358,12 +332,7 @@ with tab1:
                                                     elif not has_m and not has_a and has_e:
                                                         if fe: parts.append(format_time_range("18:30", fe, selected_conn))
                                                 
-                                                # === 將保留的診所標籤加回去 ===
-                                                if kept_tags:
-                                                    parts.extend(kept_tags)
-                                                # ==========================
-
-                                                # 暫存為 selected_sep
+                                                # 暫存為 selected_sep，下載時 generate_excel_bytes 會再確保一次
                                                 final_val = selected_sep.join(parts)
                                                 
                                                 if final_val and final_val != cell_val:
