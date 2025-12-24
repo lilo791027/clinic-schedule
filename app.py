@@ -132,20 +132,36 @@ def format_time_range(start_str, end_str, connector="-"):
         return f"{start_str.replace(':','')}{end_str.replace(':','')}"
     return f"{start_str}{connector}{end_str}"
 
-# 專門產生 Excel 的函式
+# ------------------------------------------
+# 【關鍵新增】智慧清理函式
+# ------------------------------------------
+def clean_cell_content_smart(text, separator):
+    """
+    將含有地點的換行格式修正為括號格式，再處理剩餘的分隔符號。
+    例如: "08:00-12:00\n立吉" -> "08:00-12:00(立吉)"
+    """
+    if not isinstance(text, str) or not text or text.lower() == 'nan':
+        return ""
+    
+    # Regex 邏輯：先將 "時間\n地點" 合併為 "時間(地點)"
+    # 避免抓到數字開頭的內容(那是下一個時間)，只抓文字
+    text = re.sub(r'(\d{1,2}:\d{2}-\d{1,2}:\d{2})\s*\n\s*([^\d\n]+)(?=\n|\d|$)', r'\1(\2)', text)
+    
+    # 處理剩餘的換行和空白，轉為使用者指定的分隔符號
+    text = re.sub(r'[\n\s]+', separator, text)
+    
+    return text.strip(separator)
+
+# 專門產生 Excel 的函式 (使用智慧清理)
 def generate_excel_bytes(df, separator, connector="-"):
     output = io.BytesIO()
     df_export = df.copy()
     
-    # 找出所有日期欄位並替換分隔符號
+    # 找出所有日期欄位並應用智慧清理
     date_cols = [c for c in df_export.columns if re.match(r'\d{4}-\d{2}-\d{2}', str(c))]
     
     for col in date_cols:
-        # 先將 \n 和 空白 都轉成目標分隔符號 (逗號)
-        df_export[col] = df_export[col].astype(str).apply(lambda x: x.replace("\n", separator).replace(" ", separator) if x and x.lower()!='nan' else "")
-        # 移除重複的分隔符號
-        if separator != "\n":
-             df_export[col] = df_export[col].apply(lambda x: re.sub(f"[{separator}]+", separator, x))
+        df_export[col] = df_export[col].astype(str).apply(lambda x: clean_cell_content_smart(x, separator))
 
     with pd.ExcelWriter(output, engine='openpyxl') as w:
         df_export.to_excel(w, index=False)
@@ -280,6 +296,7 @@ with tab1:
                                             is_doctor_cell = "醫師" in cell_val or is_doctor_row
                                             
                                             if cell_val and cell_val.lower()!='nan':
+                                                # 使用 split 分割時段
                                                 shifts = re.split(r'[,\n\s]', cell_val)
                                                 has_m, has_a, has_e = False, False, False
                                                 for s in shifts:
@@ -315,7 +332,6 @@ with tab1:
                                                     default_execute = False
                                                 
                                                 parts = []
-                                                # 使用設定的連接符號
                                                 if has_m and fm: parts.append(format_time_range("08:00", fm, selected_conn))
                                                 if is_licheng:
                                                     if has_a and fa: parts.append(format_time_range("14:00", fa, selected_conn))
@@ -332,7 +348,6 @@ with tab1:
                                                     elif not has_m and not has_a and has_e:
                                                         if fe: parts.append(format_time_range("18:30", fe, selected_conn))
                                                 
-                                                # 暫存為 selected_sep，下載時 generate_excel_bytes 會再確保一次
                                                 final_val = selected_sep.join(parts)
                                                 
                                                 if final_val and final_val != cell_val:
@@ -368,7 +383,7 @@ with tab1:
 
             st.markdown("---")
             
-            # 使用目前的設定產生檔案
+            # 使用目前的設定產生檔案 (會調用 clean_cell_content_smart)
             data_export = generate_excel_bytes(st.session_state.working_df, separator=selected_sep, connector=selected_conn)
             
             c1, c2, c3 = st.columns(3)
