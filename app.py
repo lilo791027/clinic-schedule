@@ -9,8 +9,8 @@ import csv
 # ==========================================
 # 頁面基本設定
 # ==========================================
-st.set_page_config(page_title="診所行政下診時間工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所行政下診時間工具 (最終定案版)")
+st.set_page_config(page_title="診所下診時間工具", layout="wide", page_icon="🏥")
+st.title("🏥 診所下診時間工具 (最終定案版)")
 
 # ==========================================
 # 側邊欄：格式設定 (已預設為逗號)
@@ -573,4 +573,5 @@ with tab2:
 
         except Exception as e: 
             st.error(f"發生錯誤: {e}")
+
 
