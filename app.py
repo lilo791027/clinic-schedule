@@ -10,7 +10,7 @@ import csv
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所下診時間工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所下診時間工具 (鋒形極淨版)")
+st.title("🏥 診所下診時間工具 (終極極淨版)")
 
 # ==========================================
 # 側邊欄：格式設定
@@ -41,7 +41,7 @@ with st.sidebar:
 tab1, tab2 = st.tabs(["📅 階段二：排班回填", "⏱️ 階段一：完診分析"])
 
 # ==========================================
-# 通用函式
+# 通用函式 (含終極淨化過濾器)
 # ==========================================
 def smart_date_parser(date_str):
     s = str(date_str).strip()
@@ -61,6 +61,37 @@ def smart_date_parser(date_str):
             return dt.strftime('%Y-%m-%d')
         except: continue
     return s
+
+def ultimate_clean(val):
+    """最核心的淨化函式：殺除正方形、拯救文字、消滅孤立逗號"""
+    if pd.isna(val) or str(val).lower() == 'nan': return ""
+    s = str(val)
+    
+    # 1. 根除正方形
+    s = re.sub(r'[■□]', '', s)
+    
+    # 2. 如果裡面沒有中文字、英文字母或數字，直接判定為無效內容，回傳乾淨空白
+    if not re.search(r'[A-Za-z0-9\u4e00-\u9fa5]', s):
+        return ""
+        
+    # 3. 削去頭尾因轉換殘留的逗號、分號、換行與空白 (拯救 "■,◇主管◇早班" 的關鍵)
+    return s.strip(" \n\r\t,;，")
+
+def final_export_clean(val, sep):
+    """匯出前的最終整理，套用使用者選擇的分隔符號"""
+    s = ultimate_clean(val)
+    if not s: return ""
+    
+    # 轉換換行符號為使用者選擇的符號
+    s = s.replace("\n", sep)
+    
+    # 防止產生 ",," 這種連續符號
+    if sep != "\n" and sep != " ":
+        esc_sep = re.escape(sep)
+        s = re.sub(f"[{esc_sep}]+", sep, s)
+        
+    # 最後再削一次邊緣
+    return s.strip(" \n\r\t,;，" + sep)
 
 def parse_time_obj(raw_time_str):
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None
@@ -146,7 +177,7 @@ def generate_excel_bytes(df, separator):
 # ==========================================
 with tab1:
     st.header("排班表延診回填工具")
-    st.info("💡 下載的結果檔會經過精準過濾，只留下有效文字，把礙眼的「■,」或逗號全部變成乾淨空白。")
+    st.info("💡 下載的結果檔會經過精準過濾，只留下有效文字，把礙眼的「■,」或孤立的逗號全部變成乾淨空白。")
     
     if 'working_df' not in st.session_state: st.session_state.working_df = None
     if 'last_uploaded_filename' not in st.session_state: st.session_state.last_uploaded_filename = ""
@@ -164,6 +195,11 @@ with tab1:
                 else:
                     df_raw = pd.read_excel(uploaded_file, dtype=str)
 
+                # 🚀 第一道防線：上傳時立刻執行「終極淨化」
+                for col in df_raw.columns:
+                    if re.search(r'\d{1,2}/\d{1,2}', str(col)) or re.match(r'\d{4}-\d{2}-\d{2}', str(col)):
+                        df_raw[col] = df_raw[col].apply(ultimate_clean)
+
                 rename_dict = {}
                 for col in df_raw.columns:
                     if any(x in str(col) for x in ['姓名', '編號', '班別', 'ID', 'Name']): continue
@@ -174,7 +210,7 @@ with tab1:
                 if rename_dict: df_raw = df_raw.rename(columns=rename_dict)
                 st.session_state.working_df = df_raw
                 st.session_state.last_uploaded_filename = uploaded_file.name
-                st.success("✅ 排班表讀取成功！")
+                st.success("✅ 排班表讀取成功！已自動淨化所有無意義的符號方塊。")
 
             df = st.session_state.working_df
 
@@ -347,32 +383,14 @@ with tab1:
 
             st.markdown("---")
             
-            # 🚀 匯出前的終極過濾機制 (只打擊殘留物，保護正常文字)
+            # 🚀 第二道防線：匯出前再次過濾，並套用自訂分隔符號
             if st.session_state.working_df is not None:
                 df_export = st.session_state.working_df.copy()
                 
-                def final_clean(val, sep):
-                    if pd.isna(val) or str(val).lower() == 'nan': return ""
-                    s = str(val)
-                    
-                    # 轉換換行與空白為選擇的分隔符
-                    s = s.replace("\n", sep).replace("　", sep).replace(" ", sep)
-                    if sep != "\n":
-                        esc_sep = re.escape(sep)
-                        s = re.sub(f"[{esc_sep}]+", sep, s)
-                        
-                    # 🎯 精準狙擊：如果整個字串只剩下正方形、逗號、分號、空白，直接給乾淨空白
-                    # 這就是您要求的：當格子中有 " ■, " 或 " , " 時直接變成乾淨空白
-                    if re.match(r'^[\s■□,;]+$', s):
-                        return ""
-                        
-                    # 如果有正常文字，只削掉邊緣多餘的逗號與空白
-                    return s.strip(" \n\r\t,;" + sep)
-                
                 for col in date_cols_in_df:
-                    df_export[col] = df_export[col].apply(lambda x: final_clean(x, selected_sep))
+                    df_export[col] = df_export[col].apply(lambda x: final_export_clean(x, selected_sep))
                 
-                data_export = generate_excel_bytes(df_export, separator=selected_sep)
+                data_export = generate_excel_bytes(df_export, selected_sep)
                 
                 c1, c2, c3 = st.columns(3)
                 with c1:
