@@ -10,7 +10,7 @@ import csv
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所下診時間工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所下診時間工具 (鋒形 HR 專用版)")
+st.title("🏥 診所下診時間工具 (極淨除錯版)")
 
 # ==========================================
 # 側邊欄：格式設定
@@ -41,18 +41,15 @@ with st.sidebar:
 tab1, tab2 = st.tabs(["📅 階段二：排班回填", "⏱️ 階段一：完診分析"])
 
 # ==========================================
-# 通用函式
+# 通用函式 (含極淨過濾器)
 # ==========================================
 def smart_date_parser(date_str):
     s = str(date_str).strip()
     if s.lower() == 'nan' or not s: return ""
-    
-    # 處理 02/01(週日) 這種格式
     match = re.search(r'(\d{1,2})/(\d{1,2})', s)
     if match:
         m, d = match.groups()
         return f"{datetime.now().year}-{int(m):02d}-{int(d):02d}"
-        
     if len(s) == 7 and s.isdigit(): 
         y_roc = int(s[:3])
         return f"{y_roc + 1911}-{s[3:5]}-{s[5:]}"
@@ -63,6 +60,38 @@ def smart_date_parser(date_str):
             if dt.year == 1900: dt = dt.replace(year=datetime.now().year)
             return dt.strftime('%Y-%m-%d')
         except: continue
+    return s
+
+def initial_clean(val):
+    """在上傳時初步清理：移除正方形，沒文字就當空白"""
+    if pd.isna(val): return ""
+    s = str(val)
+    # 只要沒有英文字母、數字、中文字，就認定為無效內容，直接給乾淨空白
+    if not re.search(r'[A-Za-z0-9\u4e00-\u9fa5]', s):
+        return ""
+    # 移除正方形
+    s = re.sub(r'[■□]', '', s)
+    return s.strip(" \n\r\t,;")
+
+def export_clean(val, separator):
+    """在下載前終極清理：防止逗號殘留，統一分隔符"""
+    if pd.isna(val): return ""
+    s = str(val)
+    # 再次確認是否含有效文字
+    if not re.search(r'[A-Za-z0-9\u4e00-\u9fa5]', s):
+        return ""
+    
+    s = re.sub(r'[■□]', '', s)
+    # 把換行和空白替換成使用者選的分隔符
+    s = s.replace("\n", separator).replace(" ", separator).replace("　", separator)
+    
+    # 移除連續重複的分隔符號 (例如 ",," 變 ",")
+    if separator != "\n":
+        esc_sep = re.escape(separator)
+        s = re.sub(f"[{esc_sep}]+", separator, s)
+        
+    # 最重要的一步：徹底削掉頭尾的逗號、空白、分號、與分隔符號
+    s = s.strip(" \n\r\t,;" + separator)
     return s
 
 def parse_time_obj(raw_time_str):
@@ -134,27 +163,15 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
             
     return new_t.strftime("%H:%M")
 
-# 專門產生 Excel 的函式
-def generate_excel_bytes(df, separator, connector="-"):
+def generate_excel_bytes(df, separator):
     output = io.BytesIO()
-    df_export = df.copy()
-    
-    date_cols = [c for c in df_export.columns if re.match(r'\d{4}-\d{2}-\d{2}', str(c)) or re.search(r'\d{1,2}/\d{1,2}', str(c))]
-    
-    for col in date_cols:
-        df_export[col] = df_export[col].astype(str).apply(lambda x: x.replace("\n", separator).replace(" ", separator) if x and x.lower()!='nan' else "")
-        if separator != "\n":
-             df_export[col] = df_export[col].apply(lambda x: re.sub(f"[{separator}]+", separator, x))
-
     with pd.ExcelWriter(output, engine='openpyxl') as w:
-        df_export.to_excel(w, index=False)
+        df.to_excel(w, index=False)
         ws = w.sheets['Sheet1']
-        
         for row in ws.iter_rows():
             for cell in row:
                 cell.number_format = '@'
                 cell.alignment = Alignment(wrap_text=(separator=="\n"), vertical='center')
-                    
     return output.getvalue()
 
 # ==========================================
@@ -162,7 +179,7 @@ def generate_excel_bytes(df, separator, connector="-"):
 # ==========================================
 with tab1:
     st.header("排班表延診回填工具")
-    st.info("💡 請上傳從「鋒形 HR」匯出的最新排班表，以保留最完整的請假與調班紀錄。")
+    st.info("💡 將從系統下載的原始班表與完診紀錄上傳。結果檔將被深度過濾，去除多餘符號與逗號。")
     
     if 'working_df' not in st.session_state: st.session_state.working_df = None
     if 'last_uploaded_filename' not in st.session_state: st.session_state.last_uploaded_filename = ""
@@ -180,7 +197,10 @@ with tab1:
                 else:
                     df_raw = pd.read_excel(uploaded_file, dtype=str)
 
-                # 🛑 注意：已移除「自動清除正方形」的防呆邏輯，確保鋒形代碼完整保留！
+                # 🚀 匯入時執行初步過濾，把純符號變乾淨空白
+                for col in df_raw.columns:
+                    if re.search(r'\d{1,2}/\d{1,2}', str(col)) or re.match(r'\d{4}-\d{2}-\d{2}', str(col)):
+                        df_raw[col] = df_raw[col].apply(initial_clean)
 
                 rename_dict = {}
                 for col in df_raw.columns:
@@ -192,7 +212,7 @@ with tab1:
                 if rename_dict: df_raw = df_raw.rename(columns=rename_dict)
                 st.session_state.working_df = df_raw
                 st.session_state.last_uploaded_filename = uploaded_file.name
-                st.success("✅ 排班表讀取成功！已原封不動保留系統休假代碼。")
+                st.success("✅ 排班表讀取成功！已自動清空所有無意義的符號方塊。")
 
             df = st.session_state.working_df
 
@@ -278,7 +298,7 @@ with tab1:
                                         if t_date in time_map:
                                             cell_val = str(row[col]).strip()
                                             
-                                            # 如果格子裡根本沒有「早午晚」關鍵字或時間格式，代表是休假代碼，直接跳過不碰！
+                                            # 空白或無班別關鍵字直接跳過
                                             if not any(k in cell_val for k in ["早", "午", "晚", "全", "班", ":"]):
                                                 continue
                                                 
@@ -305,10 +325,8 @@ with tab1:
                                                 
                                                 shift_times = []
                                                 
-                                                # 🚀 核心優化：強制照早、午、晚順序檢查，有延診時直接產生「完整時間組合」
                                                 for s in ["早", "午", "晚"]:
                                                     if s in shifts:
-                                                        # 1. 取得該班別的「標準」起迄時間
                                                         start_t = {"早": "08:00", "午": "15:00", "晚": "18:30"}[s]
                                                         if is_licheng and s == "午": start_t = "14:00"
                                                         
@@ -317,7 +335,6 @@ with tab1:
                                                         if is_licheng and s == "午": end_t = "17:00"
                                                         if is_licheng and s == "晚": end_t = "21:00"
 
-                                                        # 2. 檢查實際完診是否有延診
                                                         orig_t_str = vals.get(s)
                                                         if pd.notna(orig_t_str) and str(orig_t_str).strip().lower() != 'nan':
                                                             t_obj = parse_time_obj(orig_t_str)
@@ -325,19 +342,15 @@ with tab1:
                                                                 is_d, _ = check_is_delayed(t_obj, s, selected_clinic)
                                                                 if is_d:
                                                                     has_delay = True
-                                                                    # 有延診，用修正後的時間替換標準下班時間
                                                                     fixed_t_str = calculate_time_rule(orig_t_str, s, selected_clinic, is_special)
                                                                     if fixed_t_str:
                                                                         end_t = fixed_t_str
                                                         
-                                                        # 組合這個班段的時間 (例如 08:00-12:00 或 18:30-21:42)
                                                         shift_times.append(f"{start_t}{selected_conn}{end_t}")
 
-                                                # 如果有延診，直接用「完整的時間組合」徹底蓋過原始班表代碼
                                                 if has_delay:
                                                     final_val = selected_sep.join(shift_times)
                                                 
-                                                # 如果真的有修改字串，才進入預覽名單
                                                 if has_delay and final_val != cell_val:
                                                     default_execute = not (is_doctor_cell or is_special)
                                                     changes_list.append({
@@ -372,9 +385,15 @@ with tab1:
 
             st.markdown("---")
             
-            # 使用目前的設定產生檔案
+            # 🚀 匯出前的終極過濾機制
             if st.session_state.working_df is not None:
-                data_export = generate_excel_bytes(st.session_state.working_df, separator=selected_sep, connector=selected_conn)
+                df_export = st.session_state.working_df.copy()
+                
+                # 在下載前強制削掉邊緣的逗號與不必要的符號
+                for col in date_cols_in_df:
+                    df_export[col] = df_export[col].apply(lambda x: export_clean(x, selected_sep))
+                
+                data_export = generate_excel_bytes(df_export, separator=selected_sep)
                 
                 c1, c2, c3 = st.columns(3)
                 with c1:
@@ -382,11 +401,11 @@ with tab1:
                 
                 with c2:
                     try:
-                        csv_export = st.session_state.working_df.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
+                        csv_export = df_export.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL)
                         st.download_button("📥 下載 Big5 CSV", csv_export, '排班表_含延診_準備匯入.csv', 'text/csv')
                     except: pass
                 with c3:
-                    u = st.session_state.working_df.to_csv(index=False, encoding='utf-8-sig')
+                    u = df_export.to_csv(index=False, encoding='utf-8-sig')
                     st.download_button("📥 下載 UTF-8 CSV", u, '排班表_UTF8.csv', 'text/csv')
 
         except Exception as e: st.error(f"發生錯誤: {e}")
