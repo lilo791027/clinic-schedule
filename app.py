@@ -10,7 +10,7 @@ import csv
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所下診時間工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所下診時間工具 (自動填假極淨版)")
+st.title("🏥 診所下診時間工具 (順序優化極淨版)")
 
 # ==========================================
 # 側邊欄：格式設定
@@ -184,7 +184,11 @@ with tab1:
     if 'working_df' not in st.session_state: st.session_state.working_df = None
     if 'last_uploaded_filename' not in st.session_state: st.session_state.last_uploaded_filename = ""
 
+    # ==========================================
+    # 🚀 步驟 1：上傳原始排班表
+    # ==========================================
     st.markdown("### 1. 請上傳從系統匯出的【原始排班表】")
+    st.info("💡 系統會自動把礙眼的「■,」、「▲,」或「00:00-00:00,上京」全部淨化為乾淨版。")
     uploaded_file = st.file_uploader("上傳排班表 (Excel / CSV)", type=['xlsx', 'xls', 'csv'], key="tab1_uploader")
 
     if uploaded_file is not None:
@@ -213,7 +217,7 @@ with tab1:
                 if rename_dict: df_raw = df_raw.rename(columns=rename_dict)
                 st.session_state.working_df = df_raw
                 st.session_state.last_uploaded_filename = uploaded_file.name
-                st.success("✅ 排班表讀取成功！已自動淨化所有無意義的符號與假時間。")
+                st.success("✅ 步驟 1 完成！排班表讀取成功，已自動淨化所有無意義的符號與假時間。")
 
             df = st.session_state.working_df
 
@@ -266,65 +270,10 @@ with tab1:
                         special_morning_staff = []
 
                 # ==========================================
-                # 🚀 步驟 2：自動填補空白格邏輯
+                # 🚀 步驟 2：完診比對邏輯 (移到填補空白格之前)
                 # ==========================================
                 st.markdown("---")
-                st.subheader("2. 自動填補空白格 (例假日 / 休息日)")
-                st.info("系統會按「例假日 ➡️ 休息日」的順序填滿目前的空白格。帶有「醫師」關鍵字或員編「P」開頭(兼職)的人員會自動跳過。")
-                
-                if 'fill_success' in st.session_state:
-                    st.success(st.session_state.fill_success)
-                    del st.session_state.fill_success
-
-                c_btn1, c_btn2, c_btn3 = st.columns([1,1,2])
-                with c_btn1:
-                    sta_code = st.text_input("例假日代號", "{sta}")
-                with c_btn2:
-                    res_code = st.text_input("休息日代號", "{res}")
-                with c_btn3:
-                    st.write("")
-                    if st.button("🚀 執行：自動填滿空白格", use_container_width=True):
-                        df_temp = st.session_state.working_df.copy()
-                        fill_count = 0
-                        
-                        for idx, row in df_temp.iterrows():
-                            # 1. 抓出員工編號，判斷是否為兼職 (P開頭)
-                            emp_id = ""
-                            if id_col != "(不修正)":
-                                emp_id = str(row.get(id_col, ""))
-                            else:
-                                guess_id_col = next((c for c in df_temp.columns if "編號" in str(c)), None)
-                                if guess_id_col: emp_id = str(row.get(guess_id_col, ""))
-                            
-                            is_part_time = emp_id.strip().upper().startswith('P')
-                            
-                            # 2. 抓出整列資料，判斷是否為醫師
-                            row_str = " ".join([str(v) for v in row.values if pd.notna(v)])
-                            is_doctor = "醫師" in row_str
-                            
-                            # 🎯 如果是醫師或兼職，直接跳過不填假
-                            if is_part_time or is_doctor:
-                                continue 
-                            
-                            next_is_sta = True # 每一位符合條件的員工，都從 例假日({sta}) 開始填
-                            
-                            for col in date_cols_in_df:
-                                cell_val = str(row[col]).strip()
-                                # 如果這格是乾淨的空值
-                                if pd.isna(row[col]) or cell_val == "" or cell_val.lower() == 'nan':
-                                    df_temp.at[idx, col] = sta_code if next_is_sta else res_code
-                                    next_is_sta = not next_is_sta # 填完切換下一個代號
-                                    fill_count += 1
-                                    
-                        st.session_state.working_df = df_temp
-                        st.session_state.fill_success = f"✅ 成功為正職員工排入了 {fill_count} 個例假日/休息日！(已自動跳過兼職與醫師)"
-                        st.rerun()
-
-                # ==========================================
-                # 🚀 步驟 3：完診比對邏輯
-                # ==========================================
-                st.markdown("---")
-                st.subheader("3. 請上傳已確認的【完診分析結果檔】進行比對")
+                st.subheader("2. 疊加延診時間 (請上傳【完診分析結果檔】)")
                 analysis_file = st.file_uploader("上傳完診報表 (Excel / CSV)", type=['xlsx', 'xls', 'csv'], key="tab1_analysis")
 
                 if analysis_file:
@@ -356,7 +305,7 @@ with tab1:
                                     is_special = row[name_col] in special_morning_staff
                                     row_content_str = " ".join([str(v) for v in row.values if pd.notna(v)])
                                     
-                                    # 🎯 新增防護：判斷是否為店長/主管/醫師
+                                    # 🎯 防護：判斷是否為店長/主管/醫師
                                     is_doctor_row = "醫師" in row_content_str 
                                     is_manager_row = "店長" in row_content_str or "主管" in row_content_str
 
@@ -446,11 +395,66 @@ with tab1:
                                     for _, r in rows.iterrows():
                                         idxs = st.session_state.working_df.index[st.session_state.working_df[name_col] == r['姓名']]
                                         if len(idxs)>0: st.session_state.working_df.at[idxs[0], r['日期']] = r['修正後內容']
-                                    st.success("✅ 已寫入！請點擊下方按鈕下載最終檔案。")
+                                    st.success("✅ 步驟 2 完成！延診時間已寫入。請繼續執行下方的「填補空白格」。")
                                     st.session_state['preview_df'] = None
                                     st.rerun()
 
                     except Exception as e: st.error(f"錯誤: {e}")
+
+                # ==========================================
+                # 🚀 步驟 3：自動填補剩餘空白格邏輯 (移到最後)
+                # ==========================================
+                st.markdown("---")
+                st.subheader("3. 自動填補剩餘空白格 (例假日 / 休息日)")
+                st.info("💡 請確認「步驟 2」已完成疊加後，再按此按鈕。系統會自動避開帶有「醫師」關鍵字或員編「P」開頭(兼職)的人員。")
+                
+                if 'fill_success' in st.session_state:
+                    st.success(st.session_state.fill_success)
+                    del st.session_state.fill_success
+
+                c_btn1, c_btn2, c_btn3 = st.columns([1,1,2])
+                with c_btn1:
+                    sta_code = st.text_input("例假日代號", "{sta}")
+                with c_btn2:
+                    res_code = st.text_input("休息日代號", "{res}")
+                with c_btn3:
+                    st.write("")
+                    if st.button("🚀 執行：自動填滿空白格", use_container_width=True):
+                        df_temp = st.session_state.working_df.copy()
+                        fill_count = 0
+                        
+                        for idx, row in df_temp.iterrows():
+                            # 1. 抓出員工編號，判斷是否為兼職 (P開頭)
+                            emp_id = ""
+                            if id_col != "(不修正)":
+                                emp_id = str(row.get(id_col, ""))
+                            else:
+                                guess_id_col = next((c for c in df_temp.columns if "編號" in str(c)), None)
+                                if guess_id_col: emp_id = str(row.get(guess_id_col, ""))
+                            
+                            is_part_time = emp_id.strip().upper().startswith('P')
+                            
+                            # 2. 抓出整列資料，判斷是否為醫師
+                            row_str = " ".join([str(v) for v in row.values if pd.notna(v)])
+                            is_doctor = "醫師" in row_str
+                            
+                            # 🎯 如果是醫師或兼職，直接跳過不填假
+                            if is_part_time or is_doctor:
+                                continue 
+                            
+                            next_is_sta = True # 每一位符合條件的員工，都從 例假日({sta}) 開始填
+                            
+                            for col in date_cols_in_df:
+                                cell_val = str(row[col]).strip()
+                                # 如果這格是乾淨的空值
+                                if pd.isna(row[col]) or cell_val == "" or cell_val.lower() == 'nan':
+                                    df_temp.at[idx, col] = sta_code if next_is_sta else res_code
+                                    next_is_sta = not next_is_sta # 填完切換下一個代號
+                                    fill_count += 1
+                                    
+                        st.session_state.working_df = df_temp
+                        st.session_state.fill_success = f"✅ 步驟 3 完成！成功為正職員工排入了 {fill_count} 個例假日/休息日。您可以下載匯入檔了！"
+                        st.rerun()
 
             st.markdown("---")
             
