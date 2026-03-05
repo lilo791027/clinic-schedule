@@ -354,8 +354,11 @@ with tab1:
 
                                 for idx, row in df.iterrows():
                                     is_special = row[name_col] in special_morning_staff
-                                    row_content_str = " ".join([str(v) for v in row.values if not pd.isna(v)])
+                                    row_content_str = " ".join([str(v) for v in row.values if pd.notna(v)])
+                                    
+                                    # 🎯 新增防護：判斷是否為店長/主管/醫師
                                     is_doctor_row = "醫師" in row_content_str 
+                                    is_manager_row = "店長" in row_content_str or "主管" in row_content_str
 
                                     for col in dates_to_check:
                                         t_date = smart_date_parser(col)
@@ -365,8 +368,9 @@ with tab1:
                                             # 空白或無班別關鍵字直接跳過
                                             if not any(k in cell_val for k in ["早", "午", "晚", "全", "班", ":"]):
                                                 continue
-                                                
-                                            is_doctor_cell = "醫師" in cell_val or is_doctor_row
+                                            
+                                            # 🎯 如果這格本身有寫店長/主管，或是這個人就是店長/主管/醫師，則列入排除修改名單
+                                            is_exclude_cell = "醫師" in cell_val or is_doctor_row or "店長" in cell_val or "主管" in cell_val or is_manager_row
                                             
                                             if cell_val and cell_val.lower()!='nan':
                                                 shifts = []
@@ -416,7 +420,8 @@ with tab1:
                                                     final_val = selected_sep.join(shift_times)
                                                 
                                                 if has_delay and final_val != cell_val:
-                                                    default_execute = not (is_doctor_cell or is_special)
+                                                    # 🎯 如果是店長/主管/醫師，預設打勾狀態為 False (不自動執行)
+                                                    default_execute = not (is_exclude_cell or is_special)
                                                     changes_list.append({
                                                         "✅執行": default_execute, 
                                                         "姓名": row[name_col], 
@@ -429,7 +434,7 @@ with tab1:
                                     st.session_state['preview_df'] = pd.DataFrame(changes_list)
                                     checked_count = len([x for x in changes_list if x['✅執行']])
                                     skipped_count = len(changes_list) - checked_count
-                                    st.success(f"找到 {len(changes_list)} 筆資料可更新。(醫師班預設不勾選)")
+                                    st.success(f"找到 {len(changes_list)} 筆資料可更新。(店長/主管/醫師班預設不勾選)")
                                 else: 
                                     st.session_state['preview_df'] = None
                                     st.warning("比對完畢。所有人員皆準時完診，無需更新任何班表時間。")
