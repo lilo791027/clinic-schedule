@@ -63,22 +63,21 @@ def smart_date_parser(date_str):
     return s
 
 def ultimate_clean(val):
-    """最核心的淨化函式：殺除假時間、正方形、拯救文字、消滅孤立逗號"""
+    """最核心的淨化函式：殺除假時間、正/三角形、拯救文字、消滅孤立逗號"""
     if pd.isna(val) or str(val).lower() == 'nan': return ""
     s = str(val)
     
     # 🚀 專武殺手：無情剿滅 Femas 產生的佔位時間 "00:00-00:00" 以及附帶的診所代碼 (如 上京、立全)
-    # 它會抓出 ",00:00-00:00,上京" 這樣的組合並直接拔除
     s = re.sub(r'[,\s\n;]*00:00-00:00[,\s\n;]*[^\s,;]*', '', s)
 
-    # 1. 根除正方形
-    s = re.sub(r'[■□]', '', s)
+    # 1. 根除正方形與三角形 (新增 ▲, △)
+    s = re.sub(r'[■□▲△]', '', s)
     
     # 2. 如果裡面沒有中文字、英文字母或數字，直接判定為無效內容，回傳乾淨空白
     if not re.search(r'[A-Za-z0-9\u4e00-\u9fa5]', s):
         return ""
         
-    # 3. 削去頭尾因轉換殘留的逗號、分號、換行與空白
+    # 3. 削去頭尾因轉換殘留的逗號、分號、換行與空白 (拯救 "▲,【員工】純早班" 的關鍵)
     return s.strip(" \n\r\t,;，")
 
 def final_export_clean(val, sep):
@@ -181,7 +180,7 @@ def generate_excel_bytes(df, separator):
 # ==========================================
 with tab1:
     st.header("排班表延診回填工具")
-    st.info("💡 下載的結果檔會經過精準過濾，把礙眼的「■,」或「00:00-00:00,上京」全部淨化為乾淨版。")
+    st.info("💡 下載的結果檔會經過精準過濾，把礙眼的「■,」、「▲,」或「00:00-00:00,上京」全部淨化為乾淨版。")
     
     if 'working_df' not in st.session_state: st.session_state.working_df = None
     if 'last_uploaded_filename' not in st.session_state: st.session_state.last_uploaded_filename = ""
@@ -387,7 +386,7 @@ with tab1:
 
             st.markdown("---")
             
-            # 🚀 第二道防線：匯出前再次過濾，並套用自訂分隔符號
+            # 🚀 第二道防線：匯出前再次過濾，確保萬無一失
             if st.session_state.working_df is not None:
                 df_export = st.session_state.working_df.copy()
                 
