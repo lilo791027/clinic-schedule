@@ -10,7 +10,7 @@ import csv
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所排班與完診管理工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所排班管理與延診自動化工具 (v2.2 終極鎖定版)")
+st.title("🏥 診所排班管理與延診自動化工具 (v2.4)")
 
 # ==========================================
 # 側邊欄：匯出參數設定
@@ -45,7 +45,6 @@ tab1, tab2 = st.tabs(["📅 階段二：排班自動回填", "⏱️ 階段一�
 # 核心邏輯函式
 # ==========================================
 def smart_date_parser(date_str):
-    """將各種日期格式統一轉換為 YYYY-MM-DD"""
     s = str(date_str).strip()
     if s.lower() == 'nan' or not s: return ""
     match = re.search(r'(\d{1,2})/(\d{1,2})', s)
@@ -66,7 +65,6 @@ def smart_date_parser(date_str):
     return s
 
 def ultimate_clean(val):
-    """清除系統匯出的雜質符號與假時間 (僅作用於日期欄位)"""
     if pd.isna(val) or str(val).lower() == 'nan': return ""
     s = str(val)
     s = re.sub(r'[,\s\n;]*00:00-00:00[,\s\n;]*[^\s,;]*', '', s)
@@ -76,7 +74,6 @@ def ultimate_clean(val):
     return s.strip(" \n\r\t,;，")
 
 def parse_time_obj(raw_time_str):
-    """解析時間字串，統一轉為 datetime 物件以便計算"""
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None
     try:
         t_str = str(raw_time_str).strip().replace("~", "-")
@@ -90,7 +87,6 @@ def parse_time_obj(raw_time_str):
         return None
 
 def check_is_delayed(time_obj, shift_type, clinic_name, date_str=""):
-    """偵測是否延診：包含立丞特殊標準與星期六特定診所午班邏輯"""
     if not time_obj: return False, ""
     base = datetime(2000, 1, 1)
     is_licheng = "立丞" in str(clinic_name)
@@ -130,7 +126,6 @@ def check_is_delayed(time_obj, shift_type, clinic_name, date_str=""):
     return False, threshold_str
 
 def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_morning=False, date_str=""):
-    """計算回填時間：若符合條件則延診加 5 分鐘，否則回填標準下診時間"""
     t = parse_time_obj(raw_time_str)
     if not t: return None
     
@@ -184,7 +179,6 @@ with tab1:
                     df_raw = pd.read_excel(uploaded_file, dtype=str)
 
                 rename_dict = {}
-                # 僅針對日期欄位進行淨化，姓名、員工編號等絕對保留不動
                 for col in df_raw.columns:
                     new_name = smart_date_parser(str(col))
                     if re.match(r'\d{4}-\d{2}-\d{2}', new_name):
@@ -203,14 +197,16 @@ with tab1:
             c1, c2 = st.columns(2)
             all_cols = df.columns.tolist()
             with c1:
-                name_col = st.selectbox("姓名欄位", all_cols, index=all_cols.index(next((c for c in all_cols if "姓名" in c), all_cols[0])))
+                default_name_col = next((c for c in all_cols if "姓名" in c), all_cols[0])
+                name_col = st.selectbox("姓名欄位", all_cols, index=all_cols.index(default_name_col))
             with c2:
                 id_col = st.selectbox("員工編號欄位", ["(無編號)"] + all_cols, index=0)
 
             morning_keywords = ["純早", "早班人", "08:00-12:00"]
             auto_detected_morning = []
+            
             for _, row in df.iterrows():
-                row_str = " ".join(row.astype(str))
+                row_str = " ".join([str(val) for val in row.values if pd.notna(val)])
                 if any(k in row_str for k in morning_keywords):
                     auto_detected_morning.append(row[name_col])
             
@@ -222,7 +218,16 @@ with tab1:
 
         if analysis_file:
             try:
-                df_ana = pd.read_excel(analysis_file, dtype=str) if not analysis_file.name.endswith('.csv') else pd.read_csv(analysis_file, dtype=str)
+                # 容錯處理：大寫 CSV 判斷
+                is_csv = analysis_file.name.lower().endswith('.csv')
+                if is_csv:
+                    try: df_ana = pd.read_csv(analysis_file, dtype=str)
+                    except:
+                        analysis_file.seek(0)
+                        df_ana = pd.read_csv(analysis_file, encoding='cp950', dtype=str)
+                else:
+                    df_ana = pd.read_excel(analysis_file, dtype=str)
+                
                 clinics = df_ana['診所名稱'].unique().tolist()
                 ca, cb = st.columns(2)
                 with ca: target_clinic = st.selectbox("選擇要處理的診所", clinics)
@@ -238,7 +243,7 @@ with tab1:
                     
                     for idx, row in df.iterrows():
                         staff_name = row[name_col]
-                        row_full_text = " ".join(row.astype(str))
+                        row_full_text = " ".join([str(val) for val in row.values if pd.notna(val)])
                         is_excluded = any(k in row_full_text for k in ["醫師", "店長", "主管"])
                         
                         for d_col in dates_to_run:
@@ -327,7 +332,8 @@ with tab1:
                 fill_count = 0
                 for idx, row in df_temp.iterrows():
                     emp_id = str(row.get(id_col, "")) if id_col != "(無編號)" else ""
-                    row_txt = " ".join(row.astype(str))
+                    row_txt = " ".join([str(val) for val in row.values if pd.notna(val)])
+                    
                     if "醫師" in row_txt or emp_id.strip().upper().startswith('P'):
                         continue
                     is_sta = True
@@ -340,14 +346,10 @@ with tab1:
                 st.success(f"✅ 已填補 {fill_count} 格。")
                 st.rerun()
 
-        # ==========================================
-        # 🚀 匯出階段：強制純文字格式防護罩
-        # ==========================================
         if st.session_state.working_df is not None:
             st.divider()
             df_final = st.session_state.working_df.copy()
             
-            # 匯出前，套用您選擇的分隔符號
             for col in date_cols:
                 df_final[col] = df_final[col].apply(lambda x: ultimate_clean(x).replace("\n", selected_sep))
             
@@ -356,10 +358,9 @@ with tab1:
                 df_final.to_excel(writer, index=False, sheet_name='Sheet1')
                 ws = writer.sheets['Sheet1']
                 
-                # 🛡️ 核心防護：強制整份表（包含標題列的日期與所有符號內容）全部設定為「純文字格式」
                 for row in ws.iter_rows():
                     for cell in row:
-                        cell.number_format = '@'  # 強制 Excel 視為純文字，避免自動轉換成 5/1/2026
+                        cell.number_format = '@'
                         cell.alignment = Alignment(wrap_text=(selected_sep == "\n"), vertical='center')
                         
             st.download_button(
@@ -377,7 +378,7 @@ with tab2:
     st.header("2️⃣ 完診明細批次分析與偵測")
     upload_mode = st.radio("系統來源：", ["🏥 標題在第4列", "📄 標題在第1列"], horizontal=True)
     header_row = 3 if "第4列" in upload_mode else 0
-    files = st.file_uploader("批次上傳完診明細", type=['xlsx', 'csv'], accept_multiple_files=True)
+    files = st.file_uploader("批次上傳完診明細", type=['xlsx', 'csv', 'XLSX', 'CSV'], accept_multiple_files=True)
     
     if files:
         if st.button("🚀 開始批次分析", type="primary"):
@@ -385,10 +386,31 @@ with tab2:
             for f in files:
                 try:
                     f.seek(0)
-                    h_info = pd.read_excel(f, header=None, nrows=1) if f.name.endswith('xlsx') else pd.read_csv(f, header=None, nrows=1)
+                    is_csv_file = f.name.lower().endswith('.csv')
+                    
+                    # 安全讀取表頭 (解決大小寫副檔名陷阱)
+                    if is_csv_file:
+                        try:
+                            h_info = pd.read_csv(f, header=None, nrows=1, encoding='utf-8')
+                        except:
+                            f.seek(0)
+                            h_info = pd.read_csv(f, header=None, nrows=1, encoding='cp950')
+                    else:
+                        h_info = pd.read_excel(f, header=None, nrows=1)
+                        
                     c_name = str(h_info.iloc[0,0]).strip()[:4]
+                    
+                    # 安全讀取資料
                     f.seek(0)
-                    data = pd.read_excel(f, header=header_row) if f.name.endswith('xlsx') else pd.read_csv(f, header=header_row)
+                    if is_csv_file:
+                        try:
+                            data = pd.read_csv(f, header=header_row, encoding='utf-8')
+                        except:
+                            f.seek(0)
+                            data = pd.read_csv(f, header=header_row, encoding='cp950')
+                    else:
+                        data = pd.read_excel(f, header=header_row)
+                        
                     data.columns = data.columns.astype(str).str.strip()
                     d_col = next((c for c in data.columns if "日期" in c), None)
                     s_col = next((c for c in data.columns if any(k in c for k in ["午", "班", "時"])), None)
@@ -423,7 +445,7 @@ with tab2:
                     yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
                     for row_idx, row_data in final_ana.iterrows():
                         clinic = row_data['診所名稱']
-                        t_date_str = str(row_data['日期']) # 取得日期用於星期六判斷
+                        t_date_str = str(row_data['日期'])
                         for col_idx, s_type in enumerate(existing_cols):
                             if s_type in ["早", "午", "晚"]:
                                 time_val = row_data[s_type]
