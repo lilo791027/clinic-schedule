@@ -10,7 +10,7 @@ import csv
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所排班與完診管理工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所排班管理與延診自動化工具 (v2.4)")
+st.title("🏥 診所排班管理與延診自動化工具 (v2.5)")
 
 # ==========================================
 # 側邊欄：匯出參數設定
@@ -218,7 +218,6 @@ with tab1:
 
         if analysis_file:
             try:
-                # 容錯處理：大寫 CSV 判斷
                 is_csv = analysis_file.name.lower().endswith('.csv')
                 if is_csv:
                     try: df_ana = pd.read_csv(analysis_file, dtype=str)
@@ -346,6 +345,9 @@ with tab1:
                 st.success(f"✅ 已填補 {fill_count} 格。")
                 st.rerun()
 
+        # ==========================================
+        # 🚀 匯出階段：強制純文字格式防護罩
+        # ==========================================
         if st.session_state.working_df is not None:
             st.divider()
             df_final = st.session_state.working_df.copy()
@@ -388,7 +390,6 @@ with tab2:
                     f.seek(0)
                     is_csv_file = f.name.lower().endswith('.csv')
                     
-                    # 安全讀取表頭 (解決大小寫副檔名陷阱)
                     if is_csv_file:
                         try:
                             h_info = pd.read_csv(f, header=None, nrows=1, encoding='utf-8')
@@ -400,7 +401,6 @@ with tab2:
                         
                     c_name = str(h_info.iloc[0,0]).strip()[:4]
                     
-                    # 安全讀取資料
                     f.seek(0)
                     if is_csv_file:
                         try:
@@ -412,9 +412,20 @@ with tab2:
                         data = pd.read_excel(f, header=header_row)
                         
                     data.columns = data.columns.astype(str).str.strip()
+                    
+                    # 🛡️ 終極防護：嚴格分流欄位，保證不重複
                     d_col = next((c for c in data.columns if "日期" in c), None)
-                    s_col = next((c for c in data.columns if any(k in c for k in ["午", "班", "時"])), None)
-                    t_col = next((c for c in data.columns if any(k in c for k in ["時間", "完診"])), None)
+                    
+                    # 抓班別，避開單純的 "時"，使用 "班", "時段", "早", "午", "晚"
+                    s_col = next((c for c in data.columns if c != d_col and any(k in c for k in ["班", "時段", "早", "午", "晚"])), None)
+                    
+                    # 抓時間，避開已經被抓到的 d_col 跟 s_col
+                    t_col = next((c for c in data.columns if c not in [d_col, s_col] and any(k in c for k in ["完診", "時間", "下診"])), None)
+                    
+                    # 如果標題太怪異導致抓不到，強硬使用欄位位置避免當機
+                    if not d_col and len(data.columns) > 0: d_col = data.columns[0]
+                    if not s_col and len(data.columns) > 1: s_col = data.columns[1]
+                    if not t_col and len(data.columns) > 2: t_col = data.columns[2]
                     
                     if d_col and s_col and t_col:
                         clean_data = data.dropna(subset=[d_col, t_col]).copy()
