@@ -10,7 +10,7 @@ import csv
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所排班與完診管理工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所排班管理與延診自動化工具 (v2.1)")
+st.title("🏥 診所排班管理與延診自動化工具 (v2.2 終極鎖定版)")
 
 # ==========================================
 # 側邊欄：匯出參數設定
@@ -45,6 +45,7 @@ tab1, tab2 = st.tabs(["📅 階段二：排班自動回填", "⏱️ 階段一�
 # 核心邏輯函式
 # ==========================================
 def smart_date_parser(date_str):
+    """將各種日期格式統一轉換為 YYYY-MM-DD"""
     s = str(date_str).strip()
     if s.lower() == 'nan' or not s: return ""
     match = re.search(r'(\d{1,2})/(\d{1,2})', s)
@@ -65,6 +66,7 @@ def smart_date_parser(date_str):
     return s
 
 def ultimate_clean(val):
+    """清除系統匯出的雜質符號與假時間 (僅作用於日期欄位)"""
     if pd.isna(val) or str(val).lower() == 'nan': return ""
     s = str(val)
     s = re.sub(r'[,\s\n;]*00:00-00:00[,\s\n;]*[^\s,;]*', '', s)
@@ -74,6 +76,7 @@ def ultimate_clean(val):
     return s.strip(" \n\r\t,;，")
 
 def parse_time_obj(raw_time_str):
+    """解析時間字串，統一轉為 datetime 物件以便計算"""
     if not raw_time_str or str(raw_time_str).lower() == 'nan': return None
     try:
         t_str = str(raw_time_str).strip().replace("~", "-")
@@ -87,12 +90,11 @@ def parse_time_obj(raw_time_str):
         return None
 
 def check_is_delayed(time_obj, shift_type, clinic_name, date_str=""):
-    """偵測是否延診：包含立丞特殊標準與星期六早午班特殊邏輯"""
+    """偵測是否延診：包含立丞特殊標準與星期六特定診所午班邏輯"""
     if not time_obj: return False, ""
     base = datetime(2000, 1, 1)
     is_licheng = "立丞" in str(clinic_name)
     
-    # 判斷是否為星期六，以及是否為特定診所
     is_saturday = False
     if date_str:
         try:
@@ -111,7 +113,6 @@ def check_is_delayed(time_obj, shift_type, clinic_name, date_str=""):
         else:
             threshold = base.replace(hour=18, minute=0)
             threshold_str = "18:00"
-            # 只有星期六的 立全、立竹、上京 午班才算延診 (否則強制作為不延診)
             if not (is_saturday and is_special_sat_clinic):
                 return False, threshold_str
     elif shift_type == "晚":
@@ -136,7 +137,6 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
     base = datetime(2000, 1, 1)
     is_licheng = "立丞" in str(clinic_name)
 
-    # 判斷星期六特殊規則
     is_saturday = False
     if date_str:
         try:
@@ -152,7 +152,6 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
             std = base.replace(hour=17, minute=0)
         else:
             std = base.replace(hour=18, minute=0)
-            # 若非星期六的特定診所，午班不加延診，固定回填 18:00
             if not (is_saturday and is_special_sat_clinic):
                 return "18:00"
     elif shift_type == "晚":
@@ -160,7 +159,6 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
     else:
         return None
 
-    # 延診加 5 分鐘，否則回填標準下診時間
     new_t = t + timedelta(minutes=5) if t > std else std
     return new_t.strftime("%H:%M")
 
@@ -176,7 +174,7 @@ with tab1:
 
     if uploaded_file:
         if st.session_state.working_df is None:
-            with st.spinner("正在執行「終極淨化」..."):
+            with st.spinner("讀取中，確保非排班欄位資料不被更動..."):
                 if uploaded_file.name.lower().endswith('.csv'):
                     try: df_raw = pd.read_csv(uploaded_file, dtype=str)
                     except: 
@@ -186,6 +184,7 @@ with tab1:
                     df_raw = pd.read_excel(uploaded_file, dtype=str)
 
                 rename_dict = {}
+                # 僅針對日期欄位進行淨化，姓名、員工編號等絕對保留不動
                 for col in df_raw.columns:
                     new_name = smart_date_parser(str(col))
                     if re.match(r'\d{4}-\d{2}-\d{2}', new_name):
@@ -243,7 +242,7 @@ with tab1:
                         is_excluded = any(k in row_full_text for k in ["醫師", "店長", "主管"])
                         
                         for d_col in dates_to_run:
-                            t_date = smart_date_parser(d_col) # 例如 "2023-11-04"
+                            t_date = smart_date_parser(d_col)
                             cell_val = str(row[d_col]).strip()
                             
                             if t_date in time_map and any(k in cell_val for k in ["早", "午", "晚", "全"]):
@@ -266,7 +265,6 @@ with tab1:
                                 
                                 # 2. 處理午晚班
                                 if "午" in shifts_detected and "晚" in shifts_detected:
-                                    # 午晚合併
                                     ana_time_evening = ana_data.get("晚")
                                     start_t_午 = "14:00" if is_licheng else "15:00"
                                     fixed_end_晚 = calculate_time_rule(ana_time_evening, "晚", target_clinic, False, t_date)
@@ -274,7 +272,6 @@ with tab1:
                                         formatted_segments.append(f"{start_t_午}{selected_conn}{fixed_end_晚} 午晚班一起")
                                         has_update = True
                                 elif "午" in shifts_detected:
-                                    # 只有午班
                                     ana_time_afternoon = ana_data.get("午")
                                     start_t_午 = "14:00" if is_licheng else "15:00"
                                     fixed_end_午 = calculate_time_rule(ana_time_afternoon, "午", target_clinic, False, t_date)
@@ -282,7 +279,6 @@ with tab1:
                                         formatted_segments.append(f"{start_t_午}{selected_conn}{fixed_end_午} 午班")
                                         has_update = True
                                 elif "晚" in shifts_detected:
-                                    # 只有晚班
                                     ana_time_evening = ana_data.get("晚")
                                     start_t_晚 = "18:00" if is_licheng else "18:30"
                                     fixed_end_晚 = calculate_time_rule(ana_time_evening, "晚", target_clinic, False, t_date)
@@ -344,15 +340,35 @@ with tab1:
                 st.success(f"✅ 已填補 {fill_count} 格。")
                 st.rerun()
 
+        # ==========================================
+        # 🚀 匯出階段：強制純文字格式防護罩
+        # ==========================================
         if st.session_state.working_df is not None:
             st.divider()
             df_final = st.session_state.working_df.copy()
+            
+            # 匯出前，套用您選擇的分隔符號
             for col in date_cols:
                 df_final[col] = df_final[col].apply(lambda x: ultimate_clean(x).replace("\n", selected_sep))
+            
             out = io.BytesIO()
             with pd.ExcelWriter(out, engine='openpyxl') as writer:
-                df_final.to_excel(writer, index=False)
-            st.download_button("📥 下載最終排班匯入檔 (.xlsx)", out.getvalue(), "排班回填完成檔.xlsx", type="primary", use_container_width=True)
+                df_final.to_excel(writer, index=False, sheet_name='Sheet1')
+                ws = writer.sheets['Sheet1']
+                
+                # 🛡️ 核心防護：強制整份表（包含標題列的日期與所有符號內容）全部設定為「純文字格式」
+                for row in ws.iter_rows():
+                    for cell in row:
+                        cell.number_format = '@'  # 強制 Excel 視為純文字，避免自動轉換成 5/1/2026
+                        cell.alignment = Alignment(wrap_text=(selected_sep == "\n"), vertical='center')
+                        
+            st.download_button(
+                "📥 下載最終排班匯入檔 (.xlsx)", 
+                out.getvalue(), 
+                "排班回填完成檔.xlsx", 
+                type="primary", 
+                use_container_width=True
+            )
 
 # ==========================================
 # 分頁 2: 完診分析工具
