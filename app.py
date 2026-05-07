@@ -10,7 +10,7 @@ import csv
 # 頁面基本設定
 # ==========================================
 st.set_page_config(page_title="診所排班與完診管理工具", layout="wide", page_icon="🏥")
-st.title("🏥 診所排班管理與延診自動化工具 (v2.0)")
+st.title("🏥 診所排班管理與延診自動化工具 (v2.1)")
 
 # ==========================================
 # 側邊欄：匯出參數設定
@@ -86,33 +86,75 @@ def parse_time_obj(raw_time_str):
     except:
         return None
 
-def check_is_delayed(time_obj, shift_type, clinic_name):
+def check_is_delayed(time_obj, shift_type, clinic_name, date_str=""):
+    """偵測是否延診：包含立丞特殊標準與星期六早午班特殊邏輯"""
     if not time_obj: return False, ""
     base = datetime(2000, 1, 1)
     is_licheng = "立丞" in str(clinic_name)
     
-    rules = {
-        "早": (base.replace(hour=12, minute=0), "12:00"),
-        "午": (base.replace(hour=17, minute=0) if is_licheng else base.replace(hour=18, minute=0), "17:00" if is_licheng else "18:00"),
-        "晚": (base.replace(hour=21, minute=0) if is_licheng else base.replace(hour=21, minute=30), "21:00" if is_licheng else "21:30")
-    }
+    # 判斷是否為星期六，以及是否為特定診所
+    is_saturday = False
+    if date_str:
+        try:
+            is_saturday = datetime.strptime(str(date_str).strip(), "%Y-%m-%d").weekday() == 5
+        except:
+            pass
+    is_special_sat_clinic = any(c in str(clinic_name) for c in ["立全", "立竹", "上京"])
     
-    threshold, threshold_str = rules.get(shift_type, (None, ""))
+    if shift_type == "早":
+        threshold = base.replace(hour=12, minute=0)
+        threshold_str = "12:00"
+    elif shift_type == "午":
+        if is_licheng:
+            threshold = base.replace(hour=17, minute=0)
+            threshold_str = "17:00"
+        else:
+            threshold = base.replace(hour=18, minute=0)
+            threshold_str = "18:00"
+            # 只有星期六的 立全、立竹、上京 午班才算延診 (否則強制作為不延診)
+            if not (is_saturday and is_special_sat_clinic):
+                return False, threshold_str
+    elif shift_type == "晚":
+        if is_licheng:
+            threshold = base.replace(hour=21, minute=0)
+            threshold_str = "21:00"
+        else:
+            threshold = base.replace(hour=21, minute=30)
+            threshold_str = "21:30"
+    else:
+        return False, ""
+            
     if threshold and time_obj > threshold:
         return True, threshold_str
     return False, threshold_str
 
-def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_morning=False):
+def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_morning=False, date_str=""):
+    """計算回填時間：若符合條件則延診加 5 分鐘，否則回填標準下診時間"""
     t = parse_time_obj(raw_time_str)
     if not t: return None
     
     base = datetime(2000, 1, 1)
     is_licheng = "立丞" in str(clinic_name)
 
+    # 判斷星期六特殊規則
+    is_saturday = False
+    if date_str:
+        try:
+            is_saturday = datetime.strptime(str(date_str).strip(), "%Y-%m-%d").weekday() == 5
+        except:
+            pass
+    is_special_sat_clinic = any(c in str(clinic_name) for c in ["立全", "立竹", "上京"])
+
     if shift_type == "早":
         std = base.replace(hour=13, minute=0) if is_special_morning else base.replace(hour=12, minute=0)
     elif shift_type == "午":
-        std = base.replace(hour=17, minute=0) if is_licheng else base.replace(hour=18, minute=0)
+        if is_licheng:
+            std = base.replace(hour=17, minute=0)
+        else:
+            std = base.replace(hour=18, minute=0)
+            # 若非星期六的特定診所，午班不加延診，固定回填 18:00
+            if not (is_saturday and is_special_sat_clinic):
+                return "18:00"
     elif shift_type == "晚":
         std = base.replace(hour=21, minute=0) if is_licheng else base.replace(hour=21, minute=30)
     else:
@@ -201,7 +243,7 @@ with tab1:
                         is_excluded = any(k in row_full_text for k in ["醫師", "店長", "主管"])
                         
                         for d_col in dates_to_run:
-                            t_date = smart_date_parser(d_col)
+                            t_date = smart_date_parser(d_col) # 例如 "2023-11-04"
                             cell_val = str(row[d_col]).strip()
                             
                             if t_date in time_map and any(k in cell_val for k in ["早", "午", "晚", "全"]):
@@ -217,7 +259,7 @@ with tab1:
                                 # 1. 處理早班
                                 if "早" in shifts_detected:
                                     ana_time = ana_data.get("早")
-                                    fixed_end = calculate_time_rule(ana_time, "早", target_clinic, staff_name in special_morning_staff)
+                                    fixed_end = calculate_time_rule(ana_time, "早", target_clinic, staff_name in special_morning_staff, t_date)
                                     if fixed_end:
                                         formatted_segments.append(f"08:00{selected_conn}{fixed_end} 早班")
                                         has_update = True
@@ -227,7 +269,7 @@ with tab1:
                                     # 午晚合併
                                     ana_time_evening = ana_data.get("晚")
                                     start_t_午 = "14:00" if is_licheng else "15:00"
-                                    fixed_end_晚 = calculate_time_rule(ana_time_evening, "晚", target_clinic)
+                                    fixed_end_晚 = calculate_time_rule(ana_time_evening, "晚", target_clinic, False, t_date)
                                     if fixed_end_晚:
                                         formatted_segments.append(f"{start_t_午}{selected_conn}{fixed_end_晚} 午晚班一起")
                                         has_update = True
@@ -235,7 +277,7 @@ with tab1:
                                     # 只有午班
                                     ana_time_afternoon = ana_data.get("午")
                                     start_t_午 = "14:00" if is_licheng else "15:00"
-                                    fixed_end_午 = calculate_time_rule(ana_time_afternoon, "午", target_clinic)
+                                    fixed_end_午 = calculate_time_rule(ana_time_afternoon, "午", target_clinic, False, t_date)
                                     if fixed_end_午:
                                         formatted_segments.append(f"{start_t_午}{selected_conn}{fixed_end_午} 午班")
                                         has_update = True
@@ -243,7 +285,7 @@ with tab1:
                                     # 只有晚班
                                     ana_time_evening = ana_data.get("晚")
                                     start_t_晚 = "18:00" if is_licheng else "18:30"
-                                    fixed_end_晚 = calculate_time_rule(ana_time_evening, "晚", target_clinic)
+                                    fixed_end_晚 = calculate_time_rule(ana_time_evening, "晚", target_clinic, False, t_date)
                                     if fixed_end_晚:
                                         formatted_segments.append(f"{start_t_晚}{selected_conn}{fixed_end_晚} 晚班")
                                         has_update = True
@@ -357,6 +399,7 @@ with tab2:
                 existing_cols = [c for c in ["診所名稱", "日期", "早", "午", "晚"] if c in final_ana.columns]
                 final_ana = final_ana[existing_cols].sort_values(by=["診所名稱", "日期"])
                 st.dataframe(final_ana, use_container_width=True)
+                
                 output_ana = io.BytesIO()
                 with pd.ExcelWriter(output_ana, engine='openpyxl') as writer:
                     final_ana.to_excel(writer, index=False, sheet_name="完診分析")
@@ -364,12 +407,14 @@ with tab2:
                     yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
                     for row_idx, row_data in final_ana.iterrows():
                         clinic = row_data['診所名稱']
+                        t_date_str = str(row_data['日期']) # 取得日期用於星期六判斷
                         for col_idx, s_type in enumerate(existing_cols):
                             if s_type in ["早", "午", "晚"]:
                                 time_val = row_data[s_type]
                                 if time_val:
                                     t_obj = parse_time_obj(time_val)
-                                    is_d, _ = check_is_delayed(t_obj, s_type, clinic)
+                                    is_d, _ = check_is_delayed(t_obj, s_type, clinic, t_date_str)
                                     if is_d:
                                         ws.cell(row=row_idx+2, column=col_idx+1).fill = yellow_fill
+                                        
                 st.download_button("📥 下載完診分析報表", output_ana.getvalue(), "完診分析結果檔.xlsx", type="primary")
