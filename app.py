@@ -89,17 +89,24 @@ def parse_time_obj(raw_time_str):
         return datetime(2000, 1, 1).replace(hour=t.hour, minute=t.minute, second=0)
     except: return None
 
-def check_is_delayed(time_obj, shift_type, clinic_name):
+def check_is_delayed(time_obj, shift_type, clinic_name, date_val=""):
     if not time_obj: return False, ""
     base_date = datetime(2000, 1, 1)
     is_licheng = "立丞" in str(clinic_name)
     threshold = None; threshold_str = ""
+
+    is_sat = False
+    try:
+        if date_val: is_sat = datetime.strptime(str(date_val).strip().replace('-', '/'), "%Y/%m/%d").weekday() == 5
+    except: pass
+    is_special_sat = any(c in str(clinic_name) for c in ["立全", "立竹", "上京"])
 
     if shift_type == "早":
         threshold = base_date.replace(hour=12, minute=0); threshold_str = "12:00"
     elif shift_type == "午":
         if is_licheng: threshold = base_date.replace(hour=17, minute=0); threshold_str = "17:00"
         else: threshold = base_date.replace(hour=18, minute=0); threshold_str = "18:00"
+        if not (is_sat and is_special_sat) and not is_licheng: return False, threshold_str
     elif shift_type == "晚":
         if is_licheng: threshold = base_date.replace(hour=21, minute=0); threshold_str = "21:00"
         else: threshold = base_date.replace(hour=21, minute=30); threshold_str = "21:30"
@@ -199,7 +206,7 @@ with tab1:
                         special_morning_staff = st.multiselect("🕰️ 指定「純早班」人員 (基準 13:00)：", options=all_names)
 
                 st.markdown("---")
-                st.subheader("2. 疊加延診時間 (請上傳【完診分析結果檔】)")
+                st.subheader("2. 疊加延診時間")
                 analysis_file = st.file_uploader("上傳完診報表", type=['xlsx', 'xls', 'csv', 'XLSX', 'CSV'], key="tab1_analysis")
 
                 if analysis_file:
@@ -250,30 +257,28 @@ with tab1:
                                             if "早" in shifts:
                                                 st_t = "08:00"
                                                 ed_t = "13:00" if (staff_name in special_morning_staff) else "12:00"
-                                                if pd.notna(vals.get("早")) and str(vals["早"]) != "":
+                                                if pd.notna(vals.get("早")) and str(vals["早"]).strip() != "" and str(vals["早"]).lower() != "nan":
                                                     ed_t = str(vals["早"]); has_any_change = True
                                                 shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
 
-                                            # 🎯 重大修正：立丞強制分開不合併，其他診所合併
                                             if has_a and has_e and not is_licheng:
                                                 st_t = "15:00"
                                                 ed_t = "21:30"
-                                                if pd.notna(vals.get("晚")) and str(vals["晚"]) != "":
+                                                if pd.notna(vals.get("晚")) and str(vals["晚"]).strip() != "" and str(vals["晚"]).lower() != "nan":
                                                     ed_t = str(vals["晚"]); has_any_change = True
                                                 shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
                                             else:
-                                                # 立丞診所全天班會走進這裡 (或其他人單純上早午/午晚/單班)
                                                 if has_a:
                                                     st_t = "14:00" if is_licheng else "15:00"
                                                     ed_t = "17:00" if is_licheng else "18:00"
-                                                    if pd.notna(vals.get("午")) and str(vals["午"]) != "":
+                                                    if pd.notna(vals.get("午")) and str(vals["午"]).strip() != "" and str(vals["午"]).lower() != "nan":
                                                         ed_t = str(vals["午"]); has_any_change = True
                                                     shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
                                                 
                                                 if has_e:
                                                     st_t = "18:00" if is_licheng else "18:30"
                                                     ed_t = "21:00" if is_licheng else "21:30"
-                                                    if pd.notna(vals.get("晚")) and str(vals["晚"]) != "":
+                                                    if pd.notna(vals.get("晚")) and str(vals["晚"]).strip() != "" and str(vals["晚"]).lower() != "nan":
                                                         ed_t = str(vals["晚"]); has_any_change = True
                                                     shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
 
@@ -335,13 +340,14 @@ with tab1:
         except Exception as e: st.error(f"發生錯誤: {e}")
 
 # ==========================================
-# 分頁 2: 完診分析 
+# 分頁 2: 完診分析 (完美防呆匯出版)
 # ==========================================
 with tab2:
     st.header("批次完診分析 & 異常偵測")
-    fs = st.radio("請選擇檔案類型：", ("🏥 原始系統匯出檔 (第4列標題)", "📄 標準/分析結果檔 (第1列標題)"), horizontal=True)
-    hr_idx = (4 if "第4列" in fs else 1) - 1
+    fs = st.radio("請選擇檔案類型：", ("🏥 原始系統匯出檔 (標題在第4列)", "📄 標準/分析結果檔 (標題在第1列)"), horizontal=True)
+    default_hr = 4 if "第4列" in fs else 1
     upl = st.file_uploader("上傳完診明細 (可多檔)", type=['xlsx','xls','csv','XLSX','CSV'], accept_multiple_files=True, key="t2")
+    hr_idx = st.number_input("資料標題在第幾列？", min_value=1, value=default_hr) - 1
     
     if upl:
         st.subheader("📋 檔案預覽")
@@ -401,20 +407,20 @@ with tab2:
                         if raw_m and raw_m.lower()!='nan':
                             t = parse_time_obj(raw_m)
                             if t:
-                                is_d, lim = check_is_delayed(t, "早", clinic)
-                                if is_d: delayed_records.append({"日期": date_v, "診所": clinic, "班別": "早", "標準時間": lim, "實際完診": t.strftime("%H:%M"), "狀態": "⚠️ 延診"})
+                                is_d, lim = check_is_delayed(t, "早", clinic, date_v)
+                                if is_d: delayed_records.append({"日期": date_v, "診所": clinic, "班別": "早", "標準時間": lim, "實際完診": t.strftime("%H:%M")})
                                 f_m = calculate_time_rule(raw_m, "早", clinic, False, date_v) or raw_m
                         if raw_a and raw_a.lower()!='nan':
                             t = parse_time_obj(raw_a)
                             if t:
-                                is_d, lim = check_is_delayed(t, "午", clinic)
-                                if is_d: delayed_records.append({"日期": date_v, "診所": clinic, "班別": "午", "標準時間": lim, "實際完診": t.strftime("%H:%M"), "狀態": "⚠️ 延診"})
+                                is_d, lim = check_is_delayed(t, "午", clinic, date_v)
+                                if is_d: delayed_records.append({"日期": date_v, "診所": clinic, "班別": "午", "標準時間": lim, "實際完診": t.strftime("%H:%M")})
                                 f_a = calculate_time_rule(raw_a, "午", clinic, False, date_v) or raw_a
                         if raw_e and raw_e.lower()!='nan':
                             t = parse_time_obj(raw_e)
                             if t:
-                                is_d, lim = check_is_delayed(t, "晚", clinic)
-                                if is_d: delayed_records.append({"日期": date_v, "診所": clinic, "班別": "晚", "標準時間": lim, "實際完診": t.strftime("%H:%M"), "狀態": "⚠️ 延診"})
+                                is_d, lim = check_is_delayed(t, "晚", clinic, date_val=date_v)
+                                if is_d: delayed_records.append({"日期": date_v, "診所": clinic, "班別": "晚", "標準時間": lim, "實際完診": t.strftime("%H:%M")})
                                 f_e = calculate_time_rule(raw_e, "晚", clinic, False, date_v) or raw_e
                                 
                         export_rows.append({"診所名稱": clinic, "日期": date_v, "早上(原始)": raw_m, "早上": f_m, "下午(原始)": raw_a, "下午": f_a, "晚上(原始)": raw_e, "晚上": f_e})
@@ -432,24 +438,39 @@ with tab2:
                         st.success("🎉 太棒了！本批資料完全沒有延診紀錄。")
                     
                     st.markdown("---")
+                    
+                    # 🛡️ 終極防護版黃底標記邏輯
                     def highlight_delay_rows(row):
-                        styles = ['' for _ in row.index]
-                        c_name = str(row['診所名稱'])
-                        date_str_val = str(row['日期'])
-                        def apply_y(v, s_type):
-                            if v:
-                                t = parse_time_obj(v)
-                                if check_is_delayed(t, s_type, c_name, date_str_val)[0]: return 'background-color: #FFFF00' 
+                        styles = [''] * len(row)
+                        clinic = str(row.get('診所名稱', ''))
+                        date_val_str = str(row.get('日期', ''))
+                        
+                        def apply_yellow(val_str, shift_type):
+                            if val_str and str(val_str).lower() != 'nan':
+                                t = parse_time_obj(val_str)
+                                if t and check_is_delayed(t, shift_type, clinic, date_val_str)[0]:
+                                    return 'background-color: #FFFF00' 
                             return ''
-                        if '早上(原始)' in row.index and '早上' in row.index:
-                            s = apply_y(row['早上(原始)'], '早')
-                            if s: styles[row.index.get_loc('早上(原始)')] = s; styles[row.index.get_loc('早上')] = s
-                        if '下午(原始)' in row.index and '下午' in row.index:
-                            s = apply_y(row['下午(原始)'], '午')
-                            if s: styles[row.index.get_loc('下午(原始)')] = s; styles[row.index.get_loc('下午')] = s
-                        if '晚上(原始)' in row.index and '晚上' in row.index:
-                            s = apply_y(row['晚上(原始)'], '晚')
-                            if s: styles[row.index.get_loc('晚上(原始)')] = s; styles[row.index.get_loc('晚上')] = s
+
+                        cols = list(row.index)
+                        if '早上(原始)' in cols and '早上' in cols:
+                            s = apply_yellow(row['早上(原始)'], '早')
+                            if s:
+                                styles[cols.index('早上(原始)')] = s
+                                styles[cols.index('早上')] = s
+
+                        if '下午(原始)' in cols and '下午' in cols:
+                            s = apply_yellow(row['下午(原始)'], '午')
+                            if s:
+                                styles[cols.index('下午(原始)')] = s
+                                styles[cols.index('下午')] = s
+
+                        if '晚上(原始)' in cols and '晚上' in cols:
+                            s = apply_yellow(row['晚上(原始)'], '晚')
+                            if s:
+                                styles[cols.index('晚上(原始)')] = s
+                                styles[cols.index('晚上')] = s
+                        
                         return styles
 
                     df_final = pd.DataFrame(export_rows)
@@ -458,6 +479,25 @@ with tab2:
                     
                     st.subheader("📥 下載分析結果")
                     o = io.BytesIO()
-                    with pd.ExcelWriter(o, engine='openpyxl') as w: df_final.style.apply(highlight_delay_rows, axis=1).to_excel(w, index=False)
-                    st.download_button("📥 下載完整分析報表 (.xlsx)", o.getvalue(), "完診分析報表_含延診標記.xlsx", type="primary")
-        except Exception as e: st.error(f"發生錯誤: {e}")
+                    with pd.ExcelWriter(o, engine='openpyxl') as w:
+                        try:
+                            # 如果資料表不是空的，就套用黃色標記
+                            if len(df_final) > 0:
+                                styled_df = df_final.style.apply(highlight_delay_rows, axis=1)
+                                styled_df.to_excel(w, index=False, sheet_name="完診分析")
+                            else:
+                                df_final.to_excel(w, index=False, sheet_name="完診分析")
+                        except Exception as style_err:
+                            # 終極備案：如果 openpyxl 上色崩潰，還是保證能輸出無色的正常表單！
+                            df_final.to_excel(w, index=False, sheet_name="完診分析")
+                            
+                    st.download_button(
+                        label="📥 下載完整分析報表 (.xlsx)",
+                        data=o.getvalue(),
+                        file_name='完診分析報表_含延診標記.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                        type="primary"
+                    )
+
+        except Exception as e: 
+            st.error(f"發生錯誤: {e}")
