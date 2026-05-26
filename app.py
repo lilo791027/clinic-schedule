@@ -50,8 +50,7 @@ def smart_date_parser(date_str):
             dt = datetime.strptime(s_clean, fmt)
             if dt.year == 1900: dt = dt.replace(year=datetime.now().year)
             return dt.strftime('%Y/%m/%d')
-        except ValueError:
-            continue
+        except: continue
         
     match = re.search(r'(\d{1,2})/(\d{1,2})', s_clean)
     if match:
@@ -65,23 +64,9 @@ def smart_date_parser(date_str):
 def ultimate_clean(val):
     if pd.isna(val) or str(val).lower() == 'nan': return ""
     s = str(val)
-
-    # 1. 移除無效時段與圖形
     s = re.sub(r'[,\s\n;]*00:00-00:00[,\s\n;]*[^\s,;]*', '', s)
     s = re.sub(r'[■□▲△]', '', s)
-
-    # 2. 自動消除「所有」實體時間段 (例如 08:00-12:00, 14:30~18:00)
-    s = re.sub(r'\d{1,2}:\d{2}\s*[-~]\s*\d{1,2}:\d{2}', '', s)
-
-    # 3. 消除診所名稱 (保留純班別文字)
-    clinics_to_remove = ["立丞", "立順", "立全", "立竹", "上京", "上誠", "上機", "立吉"]
-    for clinic in clinics_to_remove:
-        s = s.replace(clinic, "")
-
     if not re.search(r'[A-Za-z0-9\u4e00-\u9fa5\{\}\[\]\(\)]', s): return ""
-
-    # 4. 壓縮殘留的多餘換行與空白
-    s = re.sub(r'[\r\n]+', '\n', s) 
     return s.strip(" \n\r\t,;，")
 
 def final_export_clean(val, sep):
@@ -102,8 +87,7 @@ def parse_time_obj(raw_time_str):
         if len(t_str.split(':')) == 3: t = datetime.strptime(t_str, "%H:%M:%S")
         else: t = datetime.strptime(t_str, "%H:%M")
         return datetime(2000, 1, 1).replace(hour=t.hour, minute=t.minute, second=0)
-    except Exception:
-        return None
+    except: return None
 
 def check_is_delayed(time_obj, shift_type, clinic_name, date_val=""):
     if not time_obj: return False, ""
@@ -114,8 +98,7 @@ def check_is_delayed(time_obj, shift_type, clinic_name, date_val=""):
     is_sat = False
     try:
         if date_val: is_sat = datetime.strptime(str(date_val).strip().replace('-', '/'), "%Y/%m/%d").weekday() == 5
-    except Exception: pass
-    
+    except: pass
     is_special_sat = any(c in str(clinic_name) for c in ["立全", "立竹", "上京"])
 
     if shift_type == "早":
@@ -142,8 +125,7 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
     is_sat = False
     try:
         if date_val: is_sat = datetime.strptime(str(date_val).strip().replace('-', '/'), "%Y/%m/%d").weekday() == 5
-    except Exception: pass
-    
+    except: pass
     is_special_sat = any(c in str(clinic_name) for c in ["立全", "立竹", "上京"])
 
     if shift_type == "早":
@@ -158,6 +140,7 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
                 std = base_date.replace(hour=18, minute=0)
                 return (t + timedelta(minutes=5)).strftime("%H:%M") if t > std else std.strftime("%H:%M")
             else:
+                # 🎯 恢復正常！平日午診標準就是 18:00
                 return "18:00"
     elif shift_type == "晚":
         std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
@@ -191,7 +174,7 @@ with tab1:
             if st.session_state.working_df is None or uploaded_file.name != st.session_state.last_uploaded_filename:
                 if uploaded_file.name.lower().endswith('.csv'):
                     try: df_raw = pd.read_csv(uploaded_file, encoding='utf-8', dtype=str)
-                    except UnicodeDecodeError: df_raw = pd.read_csv(uploaded_file, encoding='cp950', dtype=str)
+                    except: df_raw = pd.read_csv(uploaded_file, encoding='cp950', dtype=str)
                 else: df_raw = pd.read_excel(uploaded_file, dtype=str)
 
                 rename_dict = {}
@@ -234,7 +217,7 @@ with tab1:
                     try:
                         if analysis_file.name.lower().endswith('.csv'):
                             try: df_ana = pd.read_csv(analysis_file, encoding='utf-8', dtype=str)
-                            except UnicodeDecodeError: df_ana = pd.read_csv(analysis_file, encoding='cp950', dtype=str)
+                            except: df_ana = pd.read_csv(analysis_file, encoding='cp950', dtype=str)
                         else: df_ana = pd.read_excel(analysis_file, dtype=str)
                         
                         if '診所名稱' in df_ana.columns and '日期' in df_ana.columns:
@@ -297,7 +280,7 @@ with tab1:
                                             is_sat = False
                                             try:
                                                 is_sat = datetime.strptime(t_date_key, "%Y/%m/%d").weekday() == 5
-                                            except Exception: pass
+                                            except: pass
                                             is_special_sat = any(c in selected_clinic for c in ["立全", "立竹", "上京"])
                                             
                                             if is_sat and is_special_sat and "晚" in shifts:
@@ -319,7 +302,7 @@ with tab1:
                                                     if t_obj:
                                                         if check_is_delayed(t_obj, "早", selected_clinic, t_date_key)[0]:
                                                             has_any_delay = True
-                                                            ed_t = str(calc_m)
+                                                        ed_t = str(calc_m)
                                                 shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
 
                                             if has_a and has_e and not is_licheng:
@@ -332,7 +315,7 @@ with tab1:
                                                     if t_obj:
                                                         if check_is_delayed(t_obj, "晚", selected_clinic, t_date_key)[0]:
                                                             has_any_delay = True
-                                                            ed_t = str(calc_e)
+                                                        ed_t = str(calc_e)
                                                 shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
                                             else:
                                                 if has_a:
@@ -345,7 +328,7 @@ with tab1:
                                                         if t_obj:
                                                             if check_is_delayed(t_obj, "午", selected_clinic, t_date_key)[0]:
                                                                 has_any_delay = True
-                                                                ed_t = str(calc_a)
+                                                            ed_t = str(calc_a)
                                                     shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
                                                 
                                                 if has_e:
@@ -358,7 +341,7 @@ with tab1:
                                                         if t_obj:
                                                             if check_is_delayed(t_obj, "晚", selected_clinic, t_date_key)[0]:
                                                                 has_any_delay = True
-                                                                ed_t = str(calc_e)
+                                                            ed_t = str(calc_e)
                                                     shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
 
                                             if has_any_delay:
@@ -378,7 +361,7 @@ with tab1:
                                     idx = st.session_state.working_df.index[st.session_state.working_df[name_col] == r['姓名']]
                                     if len(idx)>0: st.session_state.working_df.at[idx[0], r['日期']] = r['修正後內容']
                                 st.success("✅ 步驟 2 完成！延診時間已寫入。"); st.session_state['preview_df'] = None; st.rerun()
-                    except Exception as e: st.error(f"步驟 2 錯誤: {e}")
+                    except Exception as e: st.error(f"錯誤: {e}")
 
                 st.markdown("---")
                 st.subheader("3. 自動填補剩餘空白格")
@@ -414,7 +397,7 @@ with tab1:
                 with c1: st.download_button(f"📥 下載 Excel", data_exp, '排班回填_結果.xlsx', type="primary")
                 with c2: 
                     try: st.download_button("📥 下載 Big5 CSV", df_exp.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL), '排班_Big5.csv', 'text/csv')
-                    except Exception: pass
+                    except: pass
                 with c3: st.download_button("📥 下載 UTF8 CSV", df_exp.to_csv(index=False, encoding='utf-8-sig'), '排班_UTF8.csv', 'text/csv')
         except Exception as e: st.error(f"發生錯誤: {e}")
 
@@ -433,7 +416,7 @@ with tab2:
             f1 = upl[0]; f1.seek(0)
             if f1.name.lower().endswith('.csv'):
                 try: df_s = pd.read_csv(f1, header=hr_idx, encoding='cp950', nrows=5)
-                except UnicodeDecodeError: f1.seek(0); df_s = pd.read_csv(f1, header=hr_idx, encoding='utf-8', nrows=5)
+                except: f1.seek(0); df_s = pd.read_csv(f1, header=hr_idx, encoding='utf-8', nrows=5)
             else: df_s = pd.read_excel(f1, header=hr_idx, nrows=5)
             
             df_s.columns = df_s.columns.astype(str).str.strip()
@@ -453,7 +436,7 @@ with tab2:
                         f.seek(0)
                         if f.name.lower().endswith('.csv'):
                             try: h = pd.read_csv(f, header=None, nrows=1, encoding='cp950'); d = pd.read_csv(f, header=hr_idx, encoding='cp950')
-                            except UnicodeDecodeError: f.seek(0); h = pd.read_csv(f, header=None, nrows=1, encoding='utf-8'); d = pd.read_csv(f, header=hr_idx, encoding='utf-8')
+                            except: f.seek(0); h = pd.read_csv(f, header=None, nrows=1, encoding='utf-8'); d = pd.read_csv(f, header=hr_idx, encoding='utf-8')
                         else: h = pd.read_excel(f, header=None, nrows=1); d = pd.read_excel(f, header=hr_idx)
                         c_name = str(h.iloc[0,0]).strip()[:4]
                         d.columns = d.columns.astype(str).str.strip()
@@ -462,7 +445,7 @@ with tab2:
                             g = clean.groupby([d_c, s_c])[t_c].max().reset_index()
                             p = g.pivot(index=d_c, columns=s_c, values=t_c).reset_index()
                             p.insert(0, '診所名稱', c_name); p[d_c] = p[d_c].apply(smart_date_parser); res.append(p)
-                    except Exception: pass
+                    except: pass
                 
                 if res:
                     final = pd.concat(res, ignore_index=True); shifts = [c for c in final.columns if c not in ['診所名稱', d_c]]
@@ -571,4 +554,4 @@ with tab2:
                     )
 
         except Exception as e: 
-            st.error(f"分析分頁發生錯誤: {e}")
+            st.error(f"發生錯誤: {e}")
