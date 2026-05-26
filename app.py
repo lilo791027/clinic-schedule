@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import io
 import re
-from openpyxl.styles import Alignment
+from openpyxl.styles import Alignment, PatternFill
 import csv
 
 # ==========================================
@@ -65,28 +65,32 @@ def ultimate_clean(val, is_exporting=False):
     if pd.isna(val) or str(val).lower() == 'nan': return ""
     s = str(val)
 
+    if not is_exporting:
+        # 🎯 新增：偵測是否為「支援班」(有班別、有時間、有診所名)
+        time_pattern = r'\d{1,2}:\d{2}\s*[-~]\s*\d{1,2}:\d{2}'
+        clinics = ["立丞", "立順", "立全", "立竹", "上京", "上誠", "上機", "立吉", "板土", "中京", "麗明"]
+        
+        has_time = bool(re.search(time_pattern, s))
+        has_clinic = any(c in s for c in clinics)
+        
+        if has_time and has_clinic:
+            lines = [line.strip() for line in re.split(r'[\r\n]+', s) if line.strip()]
+            if len(lines) > 1:
+                # 擷取第一行(文字班別)，並貼上隱形黃底標籤
+                return f"[YELLOW]{lines[0]}"
+            else:
+                # 若擠在同一行，手動濾除時間與診所
+                s_clean = re.sub(time_pattern, '', s)
+                for c in clinics: s_clean = s_clean.replace(c, '')
+                return f"[YELLOW]{s_clean.strip()}"
+
     # 1. 移除無效時段與圖形
     s = re.sub(r'[,\s\n;]*00:00-00:00[,\s\n;]*[^\s,;]*', '', s)
     s = re.sub(r'[■□▲△]', '', s)
-
-    # 只有在初次「上傳」檔案時，才啟動時間與診所清除功能
-    if not is_exporting:
-        # 2. 自動消除「所有」實體時間段 (例如 08:00-12:00, 14:30~18:00)
-        s = re.sub(r'\d{1,2}:\d{2}\s*[-~]\s*\d{1,2}:\d{2}', '', s)
-
-        # 3. 消除各診所名稱 (保留純班別文字)
-        clinics_to_remove = ["立丞", "立順", "立全", "立竹", "上京", "上誠", "上機", "立吉"]
-        for clinic in clinics_to_remove:
-            s = s.replace(clinic, "")
-
     if not re.search(r'[A-Za-z0-9\u4e00-\u9fa5\{\}\[\]\(\)]', s): return ""
-
-    # 4. 壓縮殘留的多餘換行與空白
-    s = re.sub(r'[\r\n]+', '\n', s) 
     return s.strip(" \n\r\t,;，")
 
 def final_export_clean(val, sep):
-    # 這裡加上 is_exporting=True，告訴系統輸出時不要刪除寫好的時間
     s = ultimate_clean(val, is_exporting=True)
     if not s: return ""
     s = s.replace("\n", sep)
@@ -168,8 +172,18 @@ def generate_excel_bytes(df, separator):
     with pd.ExcelWriter(output, engine='openpyxl') as w:
         df.to_excel(w, index=False)
         ws = w.sheets['Sheet1']
+        # 🎯 定義黃色背景
+        yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+        
         for row in ws.iter_rows():
             for cell in row:
+                cell_val = str(cell.value) if cell.value is not None else ""
+                
+                # 🎯 偵測隱形標籤，若有則上黃色背景並消除標籤
+                if "[YELLOW]" in cell_val:
+                    cell.value = cell_val.replace("[YELLOW]", "")
+                    cell.fill = yellow_fill
+
                 cell.number_format = '@'
                 cell.alignment = Alignment(wrap_text=(separator=="\n"), vertical='center')
     return output.getvalue()
@@ -212,7 +226,7 @@ with tab1:
                 date_cols_in_df = [c for c in df.columns if re.match(r'\d{4}/\d{2}/\d{2}', str(c))]
                 date_cols_in_df.sort()
 
-                # 人員屬性設定（移除純早班下拉選單，全自動偵測）
+                # 人員屬性設定
                 with st.expander("👤 人員與屬性設定", expanded=False):
                     c1, c2 = st.columns(2)
                     with c1:
@@ -272,6 +286,11 @@ with tab1:
                                         t_date_key = smart_date_parser(col)
                                         if t_date_key in time_map:
                                             cell_val = str(row[col]).strip()
+                                            
+                                            # 🎯 核心防護：如果是支援班(帶有隱形黃底標籤)，直接跳過，絕不更動！
+                                            if "[YELLOW]" in cell_val:
+                                                continue
+
                                             if not any(k in cell_val for k in ["早", "午", "晚", "全", "班", ":"]): continue
                                             
                                             # 全自動偵測文字是否包含純早班
@@ -360,7 +379,6 @@ with tab1:
                                                     shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
 
                                             if has_any_delay:
-                                                # 回復原本的邏輯，單純使用組裝好的時間字串
                                                 final_v = selected_sep.join(shift_segments)
 
                                                 if final_v != cell_val:
@@ -411,12 +429,18 @@ with tab1:
                 st.divider(); df_exp = st.session_state.working_df.copy()
                 for col in date_cols_in_df: df_exp[col] = df_exp[col].apply(lambda x: final_export_clean(x, selected_sep))
                 data_exp = generate_excel_bytes(df_exp, selected_sep)
+                
+                # 🎯 貼心設定：為了確保下載 CSV 時不會出現醜醜的 [YELLOW] 字樣，一併將它濾除
+                df_csv = df_exp.copy()
+                for c in date_cols_in_df:
+                    df_csv[c] = df_csv[c].astype(str).str.replace(r'\[YELLOW\]', '', regex=True)
+
                 c1, c2, c3 = st.columns(3)
                 with c1: st.download_button(f"📥 下載 Excel", data_exp, '排班回填_結果.xlsx', type="primary")
                 with c2: 
-                    try: st.download_button("📥 下載 Big5 CSV", df_exp.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL), '排班_Big5.csv', 'text/csv')
+                    try: st.download_button("📥 下載 Big5 CSV", df_csv.to_csv(index=False, encoding='cp950', errors='replace', quoting=csv.QUOTE_ALL), '排班_Big5.csv', 'text/csv')
                     except: pass
-                with c3: st.download_button("📥 下載 UTF8 CSV", df_exp.to_csv(index=False, encoding='utf-8-sig'), '排班_UTF8.csv', 'text/csv')
+                with c3: st.download_button("📥 下載 UTF8 CSV", df_csv.to_csv(index=False, encoding='utf-8-sig'), '排班_UTF8.csv', 'text/csv')
         except Exception as e: st.error(f"發生錯誤: {e}")
 
 # ==========================================
