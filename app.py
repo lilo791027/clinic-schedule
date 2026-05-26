@@ -64,9 +64,23 @@ def smart_date_parser(date_str):
 def ultimate_clean(val):
     if pd.isna(val) or str(val).lower() == 'nan': return ""
     s = str(val)
+
+    # 1. 移除無效時段與圖形
     s = re.sub(r'[,\s\n;]*00:00-00:00[,\s\n;]*[^\s,;]*', '', s)
     s = re.sub(r'[■□▲△]', '', s)
+
+    # 2. 自動消除「所有」實體時間段 (例如 08:00-12:00, 14:30~18:00)
+    s = re.sub(r'\d{1,2}:\d{2}\s*[-~]\s*\d{1,2}:\d{2}', '', s)
+
+    # 3. 消除各診所名稱 (保留純班別文字)
+    clinics_to_remove = ["立丞", "立順", "立全", "立竹", "上京", "上誠", "上機", "立吉"]
+    for clinic in clinics_to_remove:
+        s = s.replace(clinic, "")
+
     if not re.search(r'[A-Za-z0-9\u4e00-\u9fa5\{\}\[\]\(\)]', s): return ""
+
+    # 4. 壓縮殘留的多餘換行與空白
+    s = re.sub(r'[\r\n]+', '\n', s) 
     return s.strip(" \n\r\t,;，")
 
 def final_export_clean(val, sep):
@@ -140,7 +154,6 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
                 std = base_date.replace(hour=18, minute=0)
                 return (t + timedelta(minutes=5)).strftime("%H:%M") if t > std else std.strftime("%H:%M")
             else:
-                # 🎯 恢復正常！平日午診標準就是 18:00
                 return "18:00"
     elif shift_type == "晚":
         std = base_date.replace(hour=21, minute=0) if is_licheng else base_date.replace(hour=21, minute=30)
@@ -347,11 +360,12 @@ with tab1:
                                             if has_any_delay:
                                                 final_v = selected_sep.join(shift_segments)
                                                 if final_v != cell_val:
-                                                    changes_list.append({"✅執行": not is_doctor_manager, "姓名": staff_name, "日期": col, "原始內容": cell_val, "修正後內容": final_v})
+                                                    auto_check = not (is_doctor_manager or is_special)
+                                                    changes_list.append({"✅執行": auto_check, "姓名": staff_name, "日期": col, "原始內容": cell_val, "修正後內容": final_v})
 
                                 if changes_list:
                                     st.session_state['preview_df'] = pd.DataFrame(changes_list)
-                                    st.success(f"找到 {len(changes_list)} 筆延診。(醫師/主管預設不勾選)")
+                                    st.success(f"找到 {len(changes_list)} 筆延診。(醫師/主管/純早班 預設不勾選)")
                                 else: st.warning("比對完畢。所有人員皆準時完診，無須更新時間。")
 
                         if st.session_state.get('preview_df') is not None:
