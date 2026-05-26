@@ -35,11 +35,6 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-    # --- 新增的底部標註 ---
-    st.markdown("---")
-    st.caption("Developed by 林雅婷")
-    st.caption("© 2026 Medical Group Administrative Tool")
-
 tab1, tab2 = st.tabs(["📅 階段二：排班回填", "⏱️ 階段一：完診分析"])
 
 # ==========================================
@@ -602,3 +597,15 @@ with tab2:
 
         except Exception as e: 
             st.error(f"發生錯誤: {e}")
+
+# ==========================================
+# 底部明顯頁尾
+# ==========================================
+st.markdown("---")
+footer = """
+<div style="text-align: center; padding: 30px; font-weight: bold; color: #555555; font-size: 1.1em;">
+    <p style="margin: 8px;">Developed by 林雅婷</p>
+    <p style="margin: 8px;">© 2026 Medical Group Administrative Tool</p>
+</div>
+"""
+st.markdown(footer, unsafe_allow_html=True)
