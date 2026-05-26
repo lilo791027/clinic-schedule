@@ -61,7 +61,7 @@ def smart_date_parser(date_str):
         return f"{y_roc + 1911}/{s_clean[3:5]}/{s_clean[5:]}"
     return s_clean
 
-def ultimate_clean(val):
+def ultimate_clean(val, is_exporting=False):
     if pd.isna(val) or str(val).lower() == 'nan': return ""
     s = str(val)
 
@@ -69,13 +69,15 @@ def ultimate_clean(val):
     s = re.sub(r'[,\s\n;]*00:00-00:00[,\s\n;]*[^\s,;]*', '', s)
     s = re.sub(r'[■□▲△]', '', s)
 
-    # 2. 自動消除「所有」實體時間段 (例如 08:00-12:00, 14:30~18:00)
-    s = re.sub(r'\d{1,2}:\d{2}\s*[-~]\s*\d{1,2}:\d{2}', '', s)
+    # 只有在初次「上傳」檔案時，才啟動時間與診所清除功能
+    if not is_exporting:
+        # 2. 自動消除「所有」實體時間段 (例如 08:00-12:00, 14:30~18:00)
+        s = re.sub(r'\d{1,2}:\d{2}\s*[-~]\s*\d{1,2}:\d{2}', '', s)
 
-    # 3. 消除各診所名稱 (保留純班別文字)
-    clinics_to_remove = ["立丞", "立順", "立全", "立竹", "上京", "上誠", "上機", "立吉"]
-    for clinic in clinics_to_remove:
-        s = s.replace(clinic, "")
+        # 3. 消除各診所名稱 (保留純班別文字)
+        clinics_to_remove = ["立丞", "立順", "立全", "立竹", "上京", "上誠", "上機", "立吉"]
+        for clinic in clinics_to_remove:
+            s = s.replace(clinic, "")
 
     if not re.search(r'[A-Za-z0-9\u4e00-\u9fa5\{\}\[\]\(\)]', s): return ""
 
@@ -84,7 +86,8 @@ def ultimate_clean(val):
     return s.strip(" \n\r\t,;，")
 
 def final_export_clean(val, sep):
-    s = ultimate_clean(val)
+    # 這裡加上 is_exporting=True，告訴系統輸出時不要刪除寫好的時間
+    s = ultimate_clean(val, is_exporting=True)
     if not s: return ""
     s = s.replace("\n", sep)
     if sep != "\n" and sep != " ":
@@ -209,7 +212,7 @@ with tab1:
                 date_cols_in_df = [c for c in df.columns if re.match(r'\d{4}/\d{2}/\d{2}', str(c))]
                 date_cols_in_df.sort()
 
-                # 🎯 人員屬性設定（已依照需求移除純早班下拉選單，全自動偵測）
+                # 人員屬性設定（移除純早班下拉選單，全自動偵測）
                 with st.expander("👤 人員與屬性設定", expanded=False):
                     c1, c2 = st.columns(2)
                     with c1:
@@ -271,7 +274,7 @@ with tab1:
                                             cell_val = str(row[col]).strip()
                                             if not any(k in cell_val for k in ["早", "午", "晚", "全", "班", ":"]): continue
                                             
-                                            # 🎯 全自動偵測文字是否包含純早班
+                                            # 全自動偵測文字是否包含純早班
                                             is_special = "純早" in cell_val
                                             
                                             shifts = []
@@ -306,7 +309,7 @@ with tab1:
 
                                             if "早" in shifts:
                                                 st_t = "08:00"
-                                                ed_t = "12:00" # 🎯 移除 13:00 邏輯，照常計算延診
+                                                ed_t = "12:00"
                                                 orig_m = vals.get("早_orig")
                                                 calc_m = vals.get("早_calc")
                                                 if pd.notna(orig_m) and str(orig_m).strip().lower() not in ['nan', '']:
@@ -357,9 +360,10 @@ with tab1:
                                                     shift_segments.append(f"{st_t}{selected_conn}{ed_t}")
 
                                             if has_any_delay:
+                                                # 回復原本的邏輯，單純使用組裝好的時間字串
                                                 final_v = selected_sep.join(shift_segments)
+
                                                 if final_v != cell_val:
-                                                    # 🎯 只要是醫師、主管，或文字包含「純早」，都預設不勾選（這樣就能維持原本的文字不被修改）
                                                     auto_check = not (is_doctor_manager or is_special)
                                                     changes_list.append({"✅執行": auto_check, "姓名": staff_name, "日期": col, "原始內容": cell_val, "修正後內容": final_v})
 
