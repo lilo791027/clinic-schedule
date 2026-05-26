@@ -130,7 +130,7 @@ def check_is_delayed(time_obj, shift_type, clinic_name, date_val=""):
     if threshold and time_obj > threshold: return True, threshold_str
     return False, threshold_str
 
-def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_morning=False, date_val=""):
+def calculate_time_rule(raw_time_str, shift_type, clinic_name, date_val=""):
     t = parse_time_obj(raw_time_str)
     if not t: return None
     base_date = datetime(2000, 1, 1)
@@ -143,7 +143,7 @@ def calculate_time_rule(raw_time_str, shift_type, clinic_name, is_special_mornin
     is_special_sat = any(c in str(clinic_name) for c in ["立全", "立竹", "上京"])
 
     if shift_type == "早":
-        std = base_date.replace(hour=13, minute=0) if is_special_morning else base_date.replace(hour=12, minute=0)
+        std = base_date.replace(hour=12, minute=0)
         return (t + timedelta(minutes=5)).strftime("%H:%M") if t > std else std.strftime("%H:%M")
     elif shift_type == "午":
         if is_licheng:
@@ -209,6 +209,7 @@ with tab1:
                 date_cols_in_df = [c for c in df.columns if re.match(r'\d{4}/\d{2}/\d{2}', str(c))]
                 date_cols_in_df.sort()
 
+                # 🎯 人員屬性設定（已依照需求移除純早班下拉選單，全自動偵測）
                 with st.expander("👤 人員與屬性設定", expanded=False):
                     c1, c2 = st.columns(2)
                     with c1:
@@ -217,10 +218,6 @@ with tab1:
                     with c2:
                         default_id = next((c for c in all_columns if "編號" in c), "(不修正)")
                         id_col = st.selectbox("員工編號欄位：", ["(不修正)"] + all_columns, index=(all_columns.index(default_id)+1 if default_id in all_columns else 0))
-                    
-                    if name_col:
-                        all_names = df[name_col].dropna().unique().tolist()
-                        special_morning_staff = st.multiselect("🕰️ 指定「純早班」人員 (基準 13:00)：", options=all_names)
 
                 st.markdown("---")
                 st.subheader("2. 疊加延診時間 (請上傳【完診分析結果檔】)")
@@ -265,7 +262,6 @@ with tab1:
 
                                 for idx, row in df.iterrows():
                                     staff_name = str(row[name_col])
-                                    is_special = staff_name in special_morning_staff
                                     row_txt = " ".join([str(v) for v in row.values if pd.notna(v)])
                                     is_doctor_manager = any(k in row_txt for k in ["醫師", "店長", "主管"])
 
@@ -274,6 +270,9 @@ with tab1:
                                         if t_date_key in time_map:
                                             cell_val = str(row[col]).strip()
                                             if not any(k in cell_val for k in ["早", "午", "晚", "全", "班", ":"]): continue
+                                            
+                                            # 🎯 全自動偵測文字是否包含純早班
+                                            is_special = "純早" in cell_val
                                             
                                             shifts = []
                                             if "早" in cell_val or "全" in cell_val: shifts.append("早")
@@ -307,7 +306,7 @@ with tab1:
 
                                             if "早" in shifts:
                                                 st_t = "08:00"
-                                                ed_t = "13:00" if is_special else "12:00"
+                                                ed_t = "12:00" # 🎯 移除 13:00 邏輯，照常計算延診
                                                 orig_m = vals.get("早_orig")
                                                 calc_m = vals.get("早_calc")
                                                 if pd.notna(orig_m) and str(orig_m).strip().lower() not in ['nan', '']:
@@ -360,6 +359,7 @@ with tab1:
                                             if has_any_delay:
                                                 final_v = selected_sep.join(shift_segments)
                                                 if final_v != cell_val:
+                                                    # 🎯 只要是醫師、主管，或文字包含「純早」，都預設不勾選（這樣就能維持原本的文字不被修改）
                                                     auto_check = not (is_doctor_manager or is_special)
                                                     changes_list.append({"✅執行": auto_check, "姓名": staff_name, "日期": col, "原始內容": cell_val, "修正後內容": final_v})
 
@@ -480,19 +480,19 @@ with tab2:
                             if t:
                                 is_d, lim = check_is_delayed(t, "早", clinic, date_v)
                                 if is_d: delayed_records.append({"日期": date_v, "診所": clinic, "班別": "早", "標準時間": lim, "實際完診": t.strftime("%H:%M")})
-                                f_m = calculate_time_rule(raw_m, "早", clinic, False, date_v) or raw_m
+                                f_m = calculate_time_rule(raw_m, "早", clinic, date_val=date_v) or raw_m
                         if raw_a and raw_a.lower()!='nan':
                             t = parse_time_obj(raw_a)
                             if t:
                                 is_d, lim = check_is_delayed(t, "午", clinic, date_v)
                                 if is_d: delayed_records.append({"日期": date_v, "診所": clinic, "班別": "午", "標準時間": lim, "實際完診": t.strftime("%H:%M")})
-                                f_a = calculate_time_rule(raw_a, "午", clinic, False, date_v) or raw_a
+                                f_a = calculate_time_rule(raw_a, "午", clinic, date_val=date_v) or raw_a
                         if raw_e and raw_e.lower()!='nan':
                             t = parse_time_obj(raw_e)
                             if t:
                                 is_d, lim = check_is_delayed(t, "晚", clinic, date_v)
                                 if is_d: delayed_records.append({"日期": date_v, "診所": clinic, "班別": "晚", "標準時間": lim, "實際完診": t.strftime("%H:%M")})
-                                f_e = calculate_time_rule(raw_e, "晚", clinic, False, date_v) or raw_e
+                                f_e = calculate_time_rule(raw_e, "晚", clinic, date_val=date_v) or raw_e
                                 
                         export_rows.append({"診所名稱": clinic, "日期": date_v, "早上(原始)": raw_m, "早上": f_m, "下午(原始)": raw_a, "下午": f_a, "晚上(原始)": raw_e, "晚上": f_e})
                     
