@@ -604,7 +604,6 @@ with tab2:
 st.markdown("---")
 footer = """
 <div style="text-align: center; padding: 30px; color: #444444;">
-    <p style="margin: 5px; font-size: 1.1em; font-weight: bold; letter-spacing: 1.5px;">智慧行政與自動化輔助系統</p>
     <p style="margin: 5px; font-size: 0.9em; color: #666666;">Developed by 林雅婷 | © 2026 上吉醫療體系 All rights reserved</p>
 </div>
 """
