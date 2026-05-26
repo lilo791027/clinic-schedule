@@ -66,25 +66,30 @@ def ultimate_clean(val, is_exporting=False):
     s = str(val)
 
     if not is_exporting:
-        # 🎯 新增：偵測是否為「支援班」(有班別、有時間、有診所名)
         time_pattern = r'\d{1,2}:\d{2}\s*[-~]\s*\d{1,2}:\d{2}'
         clinics = ["立丞", "立順", "立全", "立竹", "上京", "上誠", "上機", "立吉", "板土", "中京", "麗明"]
         
-        has_time = bool(re.search(time_pattern, s))
         has_clinic = any(c in s for c in clinics)
         
-        if has_time and has_clinic:
-            lines = [line.strip() for line in re.split(r'[\r\n]+', s) if line.strip()]
-            if len(lines) > 1:
-                # 擷取第一行(文字班別)，並貼上隱形黃底標籤
-                return f"[YELLOW]{lines[0]}"
-            else:
-                # 若擠在同一行，手動濾除時間與診所
-                s_clean = re.sub(time_pattern, '', s)
-                for c in clinics: s_clean = s_clean.replace(c, '')
-                return f"[YELLOW]{s_clean.strip()}"
+        # 🎯 放寬條件：只要偵測到「診所名」(代表是支援班)，無論有沒有寫時間，都啟動黃底保護機制！
+        if has_clinic:
+            # 移除時間(如果有寫的話)
+            s_clean = re.sub(time_pattern, '', s)
+            # 移除診所名，只保留純文字班表
+            for c in clinics:
+                s_clean = s_clean.replace(c, '')
+            
+            # 順手清理殘留的 00:00-00:00 或圖形
+            s_clean = re.sub(r'[,\s\n;]*00:00-00:00[,\s\n;]*[^\s,;]*', '', s_clean)
+            s_clean = re.sub(r'[■□▲△]', '', s_clean)
+            
+            # 壓縮多餘換行
+            s_clean = re.sub(r'[\r\n]+', '\n', s_clean).strip(" \n\r\t,;，")
+            
+            if s_clean:
+                return f"[YELLOW]{s_clean}"
 
-    # 1. 移除無效時段與圖形
+    # 1. 移除無效時段與圖形 (一般非支援班的清洗)
     s = re.sub(r'[,\s\n;]*00:00-00:00[,\s\n;]*[^\s,;]*', '', s)
     s = re.sub(r'[■□▲△]', '', s)
     if not re.search(r'[A-Za-z0-9\u4e00-\u9fa5\{\}\[\]\(\)]', s): return ""
@@ -293,7 +298,6 @@ with tab1:
 
                                             if not any(k in cell_val for k in ["早", "午", "晚", "全", "班", ":"]): continue
                                             
-                                            # 全自動偵測文字是否包含純早班
                                             is_special = "純早" in cell_val
                                             
                                             shifts = []
@@ -430,7 +434,7 @@ with tab1:
                 for col in date_cols_in_df: df_exp[col] = df_exp[col].apply(lambda x: final_export_clean(x, selected_sep))
                 data_exp = generate_excel_bytes(df_exp, selected_sep)
                 
-                # 🎯 貼心設定：為了確保下載 CSV 時不會出現醜醜的 [YELLOW] 字樣，一併將它濾除
+                # CSV 版去標籤
                 df_csv = df_exp.copy()
                 for c in date_cols_in_df:
                     df_csv[c] = df_csv[c].astype(str).str.replace(r'\[YELLOW\]', '', regex=True)
