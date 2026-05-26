@@ -35,6 +35,11 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
+    # --- 新增的底部標註 ---
+    st.markdown("---")
+    st.caption("Developed by 林雅婷")
+    st.caption("© 2026 Medical Group Administrative Tool")
+
 tab1, tab2 = st.tabs(["📅 階段二：排班回填", "⏱️ 階段一：完診分析"])
 
 # ==========================================
