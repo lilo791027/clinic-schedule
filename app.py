@@ -599,13 +599,13 @@ with tab2:
             st.error(f"發生錯誤: {e}")
 
 # ==========================================
-# 底部明顯頁尾
+# 底部明顯頁尾 (前瞻轉型風)
 # ==========================================
 st.markdown("---")
 footer = """
-<div style="text-align: center; padding: 30px; font-weight: bold; color: #555555; font-size: 1.1em;">
-    <p style="margin: 8px;">Developed by 林雅婷</p>
-    <p style="margin: 8px;">© 2026 Medical Group Administrative Tool</p>
+<div style="text-align: center; padding: 30px; color: #444444;">
+    <p style="margin: 5px; font-size: 1.1em; font-weight: bold; letter-spacing: 1.5px;">智慧行政與自動化輔助系統</p>
+    <p style="margin: 5px; font-size: 0.9em; color: #666666;">系統規劃建置：林雅婷 | © 2026 Medical Group</p>
 </div>
 """
 st.markdown(footer, unsafe_allow_html=True)
